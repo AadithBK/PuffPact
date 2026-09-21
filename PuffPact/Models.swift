@@ -22,12 +22,12 @@ public extension Color {
 #endif
 
 public struct UserProfile: Identifiable, Codable, Equatable {
-    public var id: UUID
+    public var id: String
     public var name: String
     public var avatarEmoji: String
     public var isCurrentUser: Bool
     
-    public init(id: UUID = UUID(), name: String, avatarEmoji: String = "👤", isCurrentUser: Bool = false) {
+    public init(id: String = UUID().uuidString, name: String, avatarEmoji: String = "👤", isCurrentUser: Bool = false) {
         self.id = id
         self.name = name
         self.avatarEmoji = avatarEmoji
@@ -36,12 +36,12 @@ public struct UserProfile: Identifiable, Codable, Equatable {
 }
 
 public struct SmokeLog: Identifiable, Codable, Equatable {
-    public var id: UUID
-    public var userId: UUID
+    public var id: String
+    public var userId: String
     public var timestamp: Date
     public var cravingTimerUsed: Bool
     
-    public init(id: UUID = UUID(), userId: UUID, timestamp: Date = Date(), cravingTimerUsed: Bool = false) {
+    public init(id: String = UUID().uuidString, userId: String, timestamp: Date = Date(), cravingTimerUsed: Bool = false) {
         self.id = id
         self.userId = userId
         self.timestamp = timestamp
@@ -76,7 +76,7 @@ public enum SettlementScenario: String, Codable {
 }
 
 public struct SettlementBreakdown: Identifiable, Codable {
-    public var id: UUID = UUID()
+    public var id: String = UUID().uuidString
     public var scenario: SettlementScenario
     public var limit: Int
     public var costPerStick: Double
