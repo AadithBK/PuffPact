@@ -7,8 +7,17 @@ import SwiftUI
 
 public struct DashboardView: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var authService: FirebaseAuthService
+    let userId: String
+    let groupId: String
+    
+    public init(userId: String, groupId: String) {
+        self.userId = userId
+        self.groupId = groupId
+    }
     
     public var body: some View {
+        Group {
         #if os(macOS)
         mainContent
             .frame(minWidth: 400, minHeight: 650)
@@ -19,13 +28,17 @@ public struct DashboardView: View {
         }
         .navigationViewStyle(StackNavigationViewStyle())
         #endif
+        }
+        .onAppear {
+            state.configure(userId: userId, groupId: groupId)
+        }
     }
     
     private var mainContent: some View {
         ScrollView {
             VStack(spacing: 20) {
                 
-                // Top Bar: Active Profile Switcher & Reset Status
+                // Top Bar: Active Profile Switcher & Logo
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("PuffPact")
@@ -35,6 +48,7 @@ public struct DashboardView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
+                    
                     Button(action: {
                         state.switchActiveUser()
                     }) {
@@ -51,7 +65,59 @@ public struct DashboardView: View {
                         .cornerRadius(16)
                     }
                     .buttonStyle(PlainButtonStyle())
+                    
+                    Button(action: {
+                        do {
+                            try authService.signOut()
+                        } catch {
+                            print("Error signing out: \(error)")
+                        }
+                    }) {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                            .font(.system(size: 14, weight: .bold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(Color.red.opacity(0.12))
+                            .foregroundColor(.red)
+                            .cornerRadius(12)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
+                
+                // Pact Code Share Card
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Pact Code")
+                            .font(.caption.bold())
+                            .foregroundColor(.secondary)
+                        Text(groupId)
+                            .font(.title2.monospaced().bold())
+                    }
+                    Spacer()
+                    Button(action: {
+                        #if os(macOS)
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(groupId, forType: .string)
+                        #else
+                        UIPasteboard.general.string = groupId
+                        #endif
+                    }) {
+                        HStack {
+                            Image(systemName: "doc.on.doc")
+                            Text("Copy")
+                                .font(.subheadline.bold())
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.blue.opacity(0.12))
+                        .foregroundColor(.blue)
+                        .cornerRadius(12)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .padding()
+                .background(Color.cardBackground)
+                .cornerRadius(18)
                 .padding(.horizontal)
                 
                 // Live Penalty Banner (if someone exceeded)

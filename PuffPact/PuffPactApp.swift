@@ -33,9 +33,10 @@ struct PuffPactApp: App {
                 case .needsGroupOnboarding:
                     OnboardingView(authService: authService)
                     
-                case .authenticated:
-                    DashboardView()
+                case .authenticated(let userId, let groupId):
+                    DashboardView(userId: userId, groupId: groupId)
                         .environmentObject(appState)
+                        .environmentObject(authService)
                 }
             }
             .animation(.easeInOut, value: authService.sessionState != .unauthenticated)
