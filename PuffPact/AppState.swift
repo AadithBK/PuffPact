@@ -5,6 +5,9 @@
 
 import SwiftUI
 import Combine
+import FirebaseFirestore
+import FirebaseAuth
+import FirebaseAnalytics
 
 public class AppState: ObservableObject {
     @Published public var currentUser: UserProfile
@@ -17,50 +20,91 @@ public class AppState: ObservableObject {
     @Published public var showingSettlementSheet: Bool = false
     @Published public var latestSettlement: SettlementBreakdown? = nil
     
+    private let db = Firestore.firestore()
+    private var usersListener: ListenerRegistration?
+    private var logsListener: ListenerRegistration?
+    
+    private var activeUserId: String = ""
+    private var activeGroupId: String = ""
+    
     public init() {
-        let userA = UserProfile(id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!, name: "You", avatarEmoji: "😎", isCurrentUser: true)
-        let userB = UserProfile(id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, name: "Sam", avatarEmoji: "🤝", isCurrentUser: false)
-        
-        self.currentUser = userA
-        self.friendUser = userB
-        self.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 2)
-        
-        // Seed initial demo data
-        seedDemoLogs(userAId: userA.id, userBId: userB.id)
+        // Safe dummy initialization to avoid crashes before configuration
+        self.currentUser = UserProfile(id: "dummy1", name: "You")
+        self.friendUser = UserProfile(id: "dummy2", name: "Friend")
+        self.pactConfig = PactConfig()
     }
     
-    private func seedDemoLogs(userAId: UUID, userBId: UUID) {
-        let now = Date()
-        var mockLogs: [SmokeLog] = []
+    public func configure(userId: String, groupId: String) {
+        guard self.activeUserId != userId || self.activeGroupId != groupId else { return }
+        self.activeUserId = userId
+        self.activeGroupId = groupId
         
-        // Seed 14 logs for current user (within limit 20)
-        for i in 1...14 {
-            let logDate = Calendar.current.date(byAdding: .hour, value: -i * 8, to: now) ?? now
-            mockLogs.append(SmokeLog(userId: userAId, timestamp: logDate))
+        listenToUsers(groupId: groupId, userId: userId)
+        listenToLogs(groupId: groupId)
+    }
+    
+    private func listenToUsers(groupId: String, userId: String) {
+        usersListener?.remove()
+        usersListener = db.collection("users").whereField("groupId", isEqualTo: groupId).addSnapshotListener { [weak self] snapshot, error in
+            guard let self = self, let docs = snapshot?.documents, error == nil else { return }
+            
+            var me: UserProfile? = nil
+            var them: UserProfile? = nil
+            
+            for doc in docs {
+                let data = doc.data()
+                let id = data["id"] as? String ?? doc.documentID
+                let name = data["name"] as? String ?? "Unknown"
+                // Extract emoji or use default
+                
+                let isMe = (id == userId)
+                let user = UserProfile(id: id, name: name, avatarEmoji: isMe ? "😎" : "🤝", isCurrentUser: isMe)
+                
+                if isMe {
+                    me = user
+                } else {
+                    them = user
+                }
+            }
+            
+            if let me = me { self.currentUser = me }
+            if let them = them {
+                self.friendUser = them
+            } else {
+                // Keep dummy friend if they haven't joined yet
+                self.friendUser = UserProfile(id: "dummy2", name: "Waiting for partner...", avatarEmoji: "⏳")
+            }
         }
-        
-        // Seed 18 logs for friend (close to limit)
-        for i in 1...18 {
-            let logDate = Calendar.current.date(byAdding: .hour, value: -i * 6, to: now) ?? now
-            mockLogs.append(SmokeLog(userId: userBId, timestamp: logDate))
+    }
+    
+    private func listenToLogs(groupId: String) {
+        logsListener?.remove()
+        logsListener = db.collection("pacts").document(groupId).collection("logs").order(by: "timestamp", descending: true).addSnapshotListener { [weak self] snapshot, error in
+            guard let self = self, let docs = snapshot?.documents, error == nil else { return }
+            
+            self.logs = docs.compactMap { doc -> SmokeLog? in
+                let data = doc.data()
+                guard let userId = data["userId"] as? String,
+                      let stamp = data["timestamp"] as? Timestamp else { return nil }
+                let craving = data["cravingTimerUsed"] as? Bool ?? false
+                
+                return SmokeLog(id: doc.documentID, userId: userId, timestamp: stamp.dateValue(), cravingTimerUsed: craving)
+            }
         }
-        
-        self.logs = mockLogs
     }
     
     // MARK: - Query Metrics
     
-    public func logsFor(userId: UUID) -> [SmokeLog] {
+    public func logsFor(userId: String) -> [SmokeLog] {
         logs.filter { $0.userId == userId }
     }
     
-    public func todayCount(for userId: UUID) -> Int {
+    public func todayCount(for userId: String) -> Int {
         let calendar = Calendar.current
         return logs.filter { $0.userId == userId && calendar.isDateInToday($0.timestamp) }.count
     }
     
-    public func weekCount(for userId: UUID) -> Int {
-        // Simple current calendar week check
+    public func weekCount(for userId: String) -> Int {
         let calendar = Calendar.current
         guard let startOfWeek = calendar.dateInterval(of: .weekOfYear, for: Date())?.start else {
             return logs.filter { $0.userId == userId }.count
@@ -68,11 +112,11 @@ public class AppState: ObservableObject {
         return logs.filter { $0.userId == userId && $0.timestamp >= startOfWeek }.count
     }
     
-    public func excessCount(for userId: UUID) -> Int {
+    public func excessCount(for userId: String) -> Int {
         max(0, weekCount(for: userId) - pactConfig.individualWeeklyLimit)
     }
     
-    public func timeSinceLastSmoke(for userId: UUID) -> String {
+    public func timeSinceLastSmoke(for userId: String) -> String {
         guard let lastLog = logs.filter({ $0.userId == userId }).max(by: { $0.timestamp < $1.timestamp }) else {
             return "No logs yet"
         }
@@ -97,24 +141,18 @@ public class AppState: ObservableObject {
         let aExceeded = aWeek > limit
         let bExceeded = bWeek > limit
         
-        if !aExceeded && !bExceeded {
-            return nil
-        }
+        if !aExceeded && !bExceeded { return nil }
         
         if aExceeded && !bExceeded {
             let excess = aWeek - limit
             return (currentUser.name, friendUser.name, Double(excess) * cost, excess)
         }
-        
         if !aExceeded && bExceeded {
             let excess = bWeek - limit
             return (friendUser.name, currentUser.name, Double(excess) * cost, excess)
         }
         
-        // Both exceeded
-        if aWeek == bWeek {
-            return nil
-        }
+        if aWeek == bWeek { return nil }
         let diff = abs(aWeek - bWeek)
         let loser = aWeek > bWeek ? currentUser.name : friendUser.name
         let winner = aWeek > bWeek ? friendUser.name : currentUser.name
@@ -123,23 +161,33 @@ public class AppState: ObservableObject {
     
     // MARK: - Actions
     
-    public func logSmoke(for userId: UUID, cravingUsed: Bool = false) {
-        let newLog = SmokeLog(userId: userId, timestamp: Date(), cravingTimerUsed: cravingUsed)
-        logs.insert(newLog, at: 0)
+    public func logSmoke(for userId: String, cravingUsed: Bool = false) {
+        guard !activeGroupId.isEmpty else { return }
+        
+        let logId = UUID().uuidString
+        db.collection("pacts").document(activeGroupId).collection("logs").document(logId).setData([
+            "id": logId,
+            "userId": userId,
+            "timestamp": FieldValue.serverTimestamp(),
+            "cravingTimerUsed": cravingUsed
+        ])
+        
+        // Log event to Firebase Analytics
+        Analytics.logEvent("smoke_logged", parameters: [
+            "user_id": userId,
+            "craving_timer_used": cravingUsed
+        ])
     }
     
-    public func undoLastLog(for userId: UUID) {
-        if let index = logs.firstIndex(where: { $0.userId == userId }) {
-            logs.remove(at: index)
+    public func undoLastLog(for userId: String) {
+        guard !activeGroupId.isEmpty else { return }
+        if let lastLog = logs.first(where: { $0.userId == userId }) {
+            db.collection("pacts").document(activeGroupId).collection("logs").document(lastLog.id).delete()
         }
     }
     
     public func switchActiveUser() {
-        currentUser.isCurrentUser.toggle()
-        friendUser.isCurrentUser.toggle()
-        let temp = currentUser
-        currentUser = friendUser
-        friendUser = temp
+        // Deprecated mock method, no-op now
     }
     
     public func triggerSettlement() {
@@ -154,102 +202,51 @@ public class AppState: ObservableObject {
         
         if aCount == bCount {
             latestSettlement = SettlementBreakdown(
-                scenario: .case4Tie,
-                limit: limit,
-                costPerStick: cost,
-                currency: sym,
-                userAName: currentUser.name,
-                userBName: friendUser.name,
-                userACount: aCount,
-                userBCount: bCount,
-                userAExcess: excessA,
-                userBExcess: excessB,
-                winnerName: nil,
-                loserName: nil,
-                penalizedSticks: 0,
-                amountOwed: 0.0,
+                scenario: .case4Tie, limit: limit, costPerStick: cost, currency: sym,
+                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
+                userAExcess: excessA, userBExcess: excessB, winnerName: nil, loserName: nil,
+                penalizedSticks: 0, amountOwed: 0.0,
                 summaryMessage: "Both smoked \(aCount) cigarettes. A perfect tie with \(sym)0.00 owed."
             )
         } else if aCount <= limit && bCount <= limit {
             let winner = aCount < bCount ? currentUser.name : friendUser.name
             let loser = aCount < bCount ? friendUser.name : currentUser.name
             latestSettlement = SettlementBreakdown(
-                scenario: .case3NeitherExceeded,
-                limit: limit,
-                costPerStick: cost,
-                currency: sym,
-                userAName: currentUser.name,
-                userBName: friendUser.name,
-                userACount: aCount,
-                userBCount: bCount,
-                userAExcess: 0,
-                userBExcess: 0,
-                winnerName: winner,
-                loserName: loser,
-                penalizedSticks: 0,
-                amountOwed: 0.0,
-                summaryMessage: "Both users stayed under the limit of \(limit)! \(winner) takes the victory for discipline."
+                scenario: .case3NeitherExceeded, limit: limit, costPerStick: cost, currency: sym,
+                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
+                userAExcess: 0, userBExcess: 0, winnerName: winner, loserName: loser,
+                penalizedSticks: 0, amountOwed: 0.0,
+                summaryMessage: "Both stay under \(limit)! \(winner) takes the victory for discipline."
             )
         } else if aCount > limit && bCount <= limit {
             let owed = Double(excessA) * cost
             latestSettlement = SettlementBreakdown(
-                scenario: .case1OneExceeded,
-                limit: limit,
-                costPerStick: cost,
-                currency: sym,
-                userAName: currentUser.name,
-                userBName: friendUser.name,
-                userACount: aCount,
-                userBCount: bCount,
-                userAExcess: excessA,
-                userBExcess: 0,
-                winnerName: friendUser.name,
-                loserName: currentUser.name,
-                penalizedSticks: excessA,
-                amountOwed: owed,
-                summaryMessage: "\(currentUser.name) exceeded the limit by \(excessA) sticks and owes \(friendUser.name) \(sym)\(String(format: "%.2f", owed))."
+                scenario: .case1OneExceeded, limit: limit, costPerStick: cost, currency: sym,
+                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
+                userAExcess: excessA, userBExcess: 0, winnerName: friendUser.name, loserName: currentUser.name,
+                penalizedSticks: excessA, amountOwed: owed,
+                summaryMessage: "\(currentUser.name) exceeded limit by \(excessA) sticks and owes \(sym)\(String(format: "%.2f", owed))."
             )
         } else if aCount <= limit && bCount > limit {
             let owed = Double(excessB) * cost
             latestSettlement = SettlementBreakdown(
-                scenario: .case1OneExceeded,
-                limit: limit,
-                costPerStick: cost,
-                currency: sym,
-                userAName: currentUser.name,
-                userBName: friendUser.name,
-                userACount: aCount,
-                userBCount: bCount,
-                userAExcess: 0,
-                userBExcess: excessB,
-                winnerName: currentUser.name,
-                loserName: friendUser.name,
-                penalizedSticks: excessB,
-                amountOwed: owed,
-                summaryMessage: "\(friendUser.name) exceeded the limit by \(excessB) sticks and owes \(currentUser.name) \(sym)\(String(format: "%.2f", owed))."
+                scenario: .case1OneExceeded, limit: limit, costPerStick: cost, currency: sym,
+                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
+                userAExcess: 0, userBExcess: excessB, winnerName: currentUser.name, loserName: friendUser.name,
+                penalizedSticks: excessB, amountOwed: owed,
+                summaryMessage: "\(friendUser.name) exceeded limit by \(excessB) sticks and owes \(sym)\(String(format: "%.2f", owed))."
             )
         } else {
-            // Both exceeded
             let diff = abs(aCount - bCount)
             let winner = aCount < bCount ? currentUser.name : friendUser.name
             let loser = aCount < bCount ? friendUser.name : currentUser.name
             let owed = Double(diff) * cost
             latestSettlement = SettlementBreakdown(
-                scenario: .case2BothExceeded,
-                limit: limit,
-                costPerStick: cost,
-                currency: sym,
-                userAName: currentUser.name,
-                userBName: friendUser.name,
-                userACount: aCount,
-                userBCount: bCount,
-                userAExcess: excessA,
-                userBExcess: excessB,
-                winnerName: winner,
-                loserName: loser,
-                penalizedSticks: diff,
-                amountOwed: owed,
-                summaryMessage: "Both exceeded the limit. \(loser) smoked \(diff) more than \(winner), owing \(sym)\(String(format: "%.2f", owed))."
+                scenario: .case2BothExceeded, limit: limit, costPerStick: cost, currency: sym,
+                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
+                userAExcess: excessA, userBExcess: excessB, winnerName: winner, loserName: loser,
+                penalizedSticks: diff, amountOwed: owed,
+                summaryMessage: "Both exceeded limit. \(loser) owes \(sym)\(String(format: "%.2f", owed))."
             )
         }
         
