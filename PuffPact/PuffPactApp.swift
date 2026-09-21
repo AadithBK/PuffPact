@@ -1,17 +1,13 @@
-//
-//  PuffPactApp.swift
-//  PuffPact
-//
-//  Created by Aadith Bijith on 18/09/2026.
-//
-
 import SwiftUI
 
 @main
 struct PuffPactApp: App {
+    @StateObject private var appState = AppState()
+    
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            DashboardView()
+                .environmentObject(appState)
         }
     }
 }
