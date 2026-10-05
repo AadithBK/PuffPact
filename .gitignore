@@ -1,0 +1,14 @@
+# Xcode
+## User settings
+xcuserdata/
+*.xcuserdatad
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+
+## Build products
+DerivedData/
+build/
+*.moved-aside
+
+# macOS
+.DS_Store

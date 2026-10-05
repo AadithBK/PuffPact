@@ -94,3 +94,17 @@ public struct SettlementBreakdown: Identifiable, Codable {
     public var summaryMessage: String
     public var isSettled: Bool = false
 }
+
+public struct JournalEntry: Identifiable, Codable, Equatable {
+    public var id: String
+    public var userId: String
+    public var text: String
+    public var timestamp: Date
+
+    public init(id: String = UUID().uuidString, userId: String, text: String, timestamp: Date = Date()) {
+        self.id = id
+        self.userId = userId
+        self.text = text
+        self.timestamp = timestamp
+    }
+}
