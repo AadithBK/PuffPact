@@ -1,0 +1,29 @@
+name: iOS App CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build_and_test:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set Default Xcode Version
+      run: sudo xcode-select -s /Applications/Xcode.app
+
+    - name: Build and Test using xcodebuild
+      # This command targets the iPhone 15 simulator to run your tests
+      run: |
+        xcodebuild clean test \
+          -project PuffPact.xcodeproj \
+          -scheme PuffPact \
+          -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          ONLY_ACTIVE_ARCH=NO
