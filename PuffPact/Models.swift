@@ -21,6 +21,141 @@ public extension Color {
 }
 #endif
 
+// MARK: - Smoking Profile Types
+
+public enum DailySmokingLevel: String, Codable, CaseIterable, Identifiable {
+    case light = "light"
+    case moderate = "moderate"
+    case heavy = "heavy"
+    case veryHeavy = "very_heavy"
+
+    public var id: String { rawValue }
+
+    public var estimatedDaily: Int {
+        switch self {
+        case .light: return 3
+        case .moderate: return 7
+        case .heavy: return 15
+        case .veryHeavy: return 25
+        }
+    }
+
+    public var displayLabel: String {
+        switch self {
+        case .light: return "Light"
+        case .moderate: return "Moderate"
+        case .heavy: return "Heavy"
+        case .veryHeavy: return "Very Heavy"
+        }
+    }
+
+    public var range: String {
+        switch self {
+        case .light: return "Less than 5"
+        case .moderate: return "5 – 10"
+        case .heavy: return "10 – 20"
+        case .veryHeavy: return "More than 20"
+        }
+    }
+
+    public var emoji: String {
+        switch self {
+        case .light: return "☁️"
+        case .moderate: return "🔥"
+        case .heavy: return "💨"
+        case .veryHeavy: return "🌋"
+        }
+    }
+}
+
+public enum SmokingGoal: String, Codable, CaseIterable, Identifiable {
+    case cutBack = "cut_back"
+    case quitCompletely = "quit_completely"
+    case justTrack = "just_track"
+
+    public var id: String { rawValue }
+
+    public var displayLabel: String {
+        switch self {
+        case .cutBack: return "Cut back gradually"
+        case .quitCompletely: return "Quit completely"
+        case .justTrack: return "Just track & stay aware"
+        }
+    }
+
+    public var emoji: String {
+        switch self {
+        case .cutBack: return "🔽"
+        case .quitCompletely: return "🚫"
+        case .justTrack: return "📊"
+        }
+    }
+
+    public var subtitle: String {
+        switch self {
+        case .cutBack: return "Reduce at your own pace"
+        case .quitCompletely: return "Work towards stopping for good"
+        case .justTrack: return "No pressure, just awareness"
+        }
+    }
+
+    public var reductionMultiplier: Double {
+        switch self {
+        case .cutBack: return 0.75
+        case .quitCompletely: return 0.50
+        case .justTrack: return 0.90
+        }
+    }
+}
+
+public enum CravingTrigger: String, Codable, CaseIterable, Identifiable {
+    case afterMeals = "after_meals"
+    case stress = "stress"
+    case social = "social"
+    case evening = "evening"
+    case commute = "commute"
+
+    public var id: String { rawValue }
+
+    public var displayLabel: String {
+        switch self {
+        case .afterMeals: return "After meals"
+        case .stress: return "Under stress / work"
+        case .social: return "Social situations"
+        case .evening: return "Evening / night"
+        case .commute: return "Commute / downtime"
+        }
+    }
+
+    public var emoji: String {
+        switch self {
+        case .afterMeals: return "☕"
+        case .stress: return "😓"
+        case .social: return "🍻"
+        case .evening: return "🌙"
+        case .commute: return "🚗"
+        }
+    }
+}
+
+public enum PactIntent: String, Codable {
+    case createNew = "create_new"
+    case joinExisting = "join_existing"
+}
+
+public struct SmokingProfile: Codable, Equatable {
+    public var dailyLevel: DailySmokingLevel
+    public var costPerStick: Double
+    public var goal: SmokingGoal
+    public var cravingTriggers: [CravingTrigger]
+    public var pactIntent: PactIntent
+
+    public var suggestedWeeklyLimit: Int {
+        let baseline = dailyLevel.estimatedDaily * 7
+        return max(1, Int(Double(baseline) * goal.reductionMultiplier))
+    }
+}
+
 public struct UserProfile: Identifiable, Codable, Equatable {
     public var id: String
     public var name: String
