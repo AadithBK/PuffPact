@@ -30,6 +30,9 @@ struct PuffPactApp: App {
                         }
                     }
                     
+                case .needsQuestionnaire:
+                    QuestionnaireView(authService: authService)
+                    
                 case .needsGroupOnboarding:
                     OnboardingView(authService: authService)
                     

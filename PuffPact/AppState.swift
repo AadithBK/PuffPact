@@ -22,6 +22,7 @@ public class AppState: ObservableObject {
     @Published public var latestSettlement: SettlementBreakdown? = nil
 
     private let db = Firestore.firestore()
+    private var pactListener: ListenerRegistration?
     private var usersListener: ListenerRegistration?
     private var logsListener: ListenerRegistration?
     private var journalListener: ListenerRegistration?
@@ -41,9 +42,23 @@ public class AppState: ObservableObject {
         self.activeUserId = userId
         self.activeGroupId = groupId
 
+        listenToPact(groupId: groupId)
         listenToUsers(groupId: groupId, userId: userId)
         listenToLogs(groupId: groupId)
         listenToJournal(groupId: groupId)
+    }
+
+    private func listenToPact(groupId: String) {
+        pactListener?.remove()
+        pactListener = db.collection("pacts").document(groupId).addSnapshotListener { [weak self] snapshot, error in
+            guard let self = self, let data = snapshot?.data(), error == nil else { return }
+            if let configData = data["config"] as? [String: Any] {
+                let limit = configData["individualWeeklyLimit"] as? Int ?? self.pactConfig.individualWeeklyLimit
+                let cost = configData["costPerStick"] as? Double ?? self.pactConfig.costPerStick
+                let reset = configData["resetDayOfWeek"] as? Int ?? self.pactConfig.resetDayOfWeek
+                self.pactConfig = PactConfig(individualWeeklyLimit: limit, costPerStick: cost, currencySymbol: self.pactConfig.currencySymbol, resetDayOfWeek: reset)
+            }
+        }
     }
     
     private func listenToUsers(groupId: String, userId: String) {
