@@ -14,15 +14,18 @@ public class AppState: ObservableObject {
     @Published public var friendUser: UserProfile
     @Published public var pactConfig: PactConfig
     @Published public var logs: [SmokeLog] = []
-    
+    @Published public var journalEntries: [JournalEntry] = []
+
     // UI Navigation & Active States
     @Published public var isCravingTimerActive: Bool = false
     @Published public var showingSettlementSheet: Bool = false
     @Published public var latestSettlement: SettlementBreakdown? = nil
-    
+
     private let db = Firestore.firestore()
+    private var pactListener: ListenerRegistration?
     private var usersListener: ListenerRegistration?
     private var logsListener: ListenerRegistration?
+    private var journalListener: ListenerRegistration?
     
     private var activeUserId: String = ""
     private var activeGroupId: String = ""
@@ -38,9 +41,24 @@ public class AppState: ObservableObject {
         guard self.activeUserId != userId || self.activeGroupId != groupId else { return }
         self.activeUserId = userId
         self.activeGroupId = groupId
-        
+
+        listenToPact(groupId: groupId)
         listenToUsers(groupId: groupId, userId: userId)
         listenToLogs(groupId: groupId)
+        listenToJournal(groupId: groupId)
+    }
+
+    private func listenToPact(groupId: String) {
+        pactListener?.remove()
+        pactListener = db.collection("pacts").document(groupId).addSnapshotListener { [weak self] snapshot, error in
+            guard let self = self, let data = snapshot?.data(), error == nil else { return }
+            if let configData = data["config"] as? [String: Any] {
+                let limit = configData["individualWeeklyLimit"] as? Int ?? self.pactConfig.individualWeeklyLimit
+                let cost = configData["costPerStick"] as? Double ?? self.pactConfig.costPerStick
+                let reset = configData["resetDayOfWeek"] as? Int ?? self.pactConfig.resetDayOfWeek
+                self.pactConfig = PactConfig(individualWeeklyLimit: limit, costPerStick: cost, currencySymbol: self.pactConfig.currencySymbol, resetDayOfWeek: reset)
+            }
+        }
     }
     
     private func listenToUsers(groupId: String, userId: String) {
@@ -81,18 +99,45 @@ public class AppState: ObservableObject {
         logsListener?.remove()
         logsListener = db.collection("pacts").document(groupId).collection("logs").order(by: "timestamp", descending: true).addSnapshotListener { [weak self] snapshot, error in
             guard let self = self, let docs = snapshot?.documents, error == nil else { return }
-            
+
             self.logs = docs.compactMap { doc -> SmokeLog? in
                 let data = doc.data()
                 guard let userId = data["userId"] as? String,
                       let stamp = data["timestamp"] as? Timestamp else { return nil }
                 let craving = data["cravingTimerUsed"] as? Bool ?? false
-                
+
                 return SmokeLog(id: doc.documentID, userId: userId, timestamp: stamp.dateValue(), cravingTimerUsed: craving)
             }
         }
     }
-    
+
+    private func listenToJournal(groupId: String) {
+        journalListener?.remove()
+        journalListener = db.collection("pacts").document(groupId).collection("journal")
+            .order(by: "timestamp", descending: true)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self = self, let docs = snapshot?.documents, error == nil else { return }
+                self.journalEntries = docs.compactMap { doc -> JournalEntry? in
+                    let data = doc.data()
+                    guard let userId = data["userId"] as? String,
+                          let text = data["text"] as? String,
+                          let stamp = data["timestamp"] as? Timestamp else { return nil }
+                    return JournalEntry(id: doc.documentID, userId: userId, text: text, timestamp: stamp.dateValue())
+                }
+            }
+    }
+
+    public func saveJournalEntry(text: String) {
+        guard !activeGroupId.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let entryId = UUID().uuidString
+        db.collection("pacts").document(activeGroupId).collection("journal").document(entryId).setData([
+            "id": entryId,
+            "userId": activeUserId,
+            "text": text.trimmingCharacters(in: .whitespacesAndNewlines),
+            "timestamp": FieldValue.serverTimestamp()
+        ])
+    }
+
     // MARK: - Query Metrics
     
     public func logsFor(userId: String) -> [SmokeLog] {

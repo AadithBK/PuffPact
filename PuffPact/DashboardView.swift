@@ -5,25 +5,35 @@
 
 import SwiftUI
 
+// MARK: - Tab Enum
+
+enum DashboardTab: String, CaseIterable {
+    case home, calendar, stats, journal
+}
+
+// MARK: - Dashboard Root
+
 public struct DashboardView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var authService: FirebaseAuthService
     let userId: String
     let groupId: String
-    
+
+    @State private var selectedTab: DashboardTab = .home
+
     public init(userId: String, groupId: String) {
         self.userId = userId
         self.groupId = groupId
     }
-    
+
     public var body: some View {
         Group {
         #if os(macOS)
-        mainContent
+        tabContent
             .frame(minWidth: 400, minHeight: 650)
         #else
         NavigationView {
-            mainContent
+            tabContent
                 .navigationBarHidden(true)
         }
         .navigationViewStyle(StackNavigationViewStyle())
@@ -33,12 +43,46 @@ public struct DashboardView: View {
             state.configure(userId: userId, groupId: groupId)
         }
     }
-    
-    private var mainContent: some View {
+
+    // MARK: - Tab Container
+
+    private var tabContent: some View {
+        ZStack(alignment: .bottom) {
+            // Content area — use TabView driven by selectedTab
+            Group {
+                switch selectedTab {
+                case .home:     homeTab
+                case .calendar: CalendarTabView()
+                case .stats:    StatsTabView()
+                case .journal:  JournalTabView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Add bottom padding so content doesn't hide behind the bar
+            .padding(.bottom, 90)
+
+            // Floating Tab Bar overlay
+            FloatingTabBar(selected: $selectedTab) {
+                state.isCravingTimerActive = true
+            }
+            .padding(.bottom, 12)
+        }
+        .background(Color.pageBackground.ignoresSafeArea())
+        .sheet(isPresented: $state.isCravingTimerActive) {
+            CravingTimerView()
+        }
+        .sheet(isPresented: $state.showingSettlementSheet) {
+            SettlementView()
+        }
+    }
+
+    // MARK: - Home Tab Content
+
+    private var homeTab: some View {
         ScrollView {
             VStack(spacing: 20) {
-                
-                // Top Bar: Active Profile Switcher & Logo
+
+                // Top Bar: Logo + Sign Out
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("PuffPact")
@@ -48,28 +92,9 @@ public struct DashboardView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    
+
                     Button(action: {
-                        state.switchActiveUser()
-                    }) {
-                        HStack(spacing: 6) {
-                            Text(state.currentUser.avatarEmoji)
-                            Text(state.currentUser.name)
-                                .font(.subheadline.bold())
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.caption)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.surfaceBackground)
-                        .cornerRadius(16)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    
-                    Button(action: {
-                        do {
-                            try authService.signOut()
-                        } catch {
+                        do { try authService.signOut() } catch {
                             print("Error signing out: \(error)")
                         }
                     }) {
@@ -83,7 +108,8 @@ public struct DashboardView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
-                
+                .padding(.horizontal)
+
                 // Pact Code Share Card
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -119,8 +145,8 @@ public struct DashboardView: View {
                 .background(Color.cardBackground)
                 .cornerRadius(18)
                 .padding(.horizontal)
-                
-                // Live Penalty Banner (if someone exceeded)
+
+                // Live Penalty Banner
                 if let debt = state.currentProjectedOwedSummary {
                     HStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -144,7 +170,7 @@ public struct DashboardView: View {
                     .cornerRadius(14)
                     .padding(.horizontal)
                 }
-                
+
                 // Dual Accountability Cards
                 HStack(spacing: 14) {
                     UserWeeklyCard(
@@ -155,7 +181,6 @@ public struct DashboardView: View {
                         lastSmoked: state.timeSinceLastSmoke(for: state.currentUser.id),
                         isCurrent: true
                     )
-                    
                     UserWeeklyCard(
                         user: state.friendUser,
                         weekCount: state.weekCount(for: state.friendUser.id),
@@ -166,17 +191,15 @@ public struct DashboardView: View {
                     )
                 }
                 .padding(.horizontal)
-                
-                // Primary Action: Log Smoke & Craving Delay
+
+                // Primary Actions
                 VStack(spacing: 12) {
                     Button(action: {
                         state.logSmoke(for: state.currentUser.id)
                     }) {
                         HStack(spacing: 10) {
-                            Image(systemName: "flame.fill")
-                                .font(.title2)
-                            Text("Log 1 Cigarette")
-                                .font(.headline)
+                            Image(systemName: "flame.fill").font(.title2)
+                            Text("Log 1 Cigarette").font(.headline)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
@@ -185,15 +208,12 @@ public struct DashboardView: View {
                         .cornerRadius(16)
                     }
                     .buttonStyle(PlainButtonStyle())
-                    
+
                     HStack(spacing: 12) {
-                        Button(action: {
-                            state.isCravingTimerActive = true
-                        }) {
+                        Button(action: { state.isCravingTimerActive = true }) {
                             HStack(spacing: 6) {
                                 Image(systemName: "timer")
-                                Text("Craving? Wait 3 Min")
-                                    .font(.subheadline.bold())
+                                Text("Craving? Wait 3 Min").font(.subheadline.bold())
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -202,14 +222,11 @@ public struct DashboardView: View {
                             .cornerRadius(12)
                         }
                         .buttonStyle(PlainButtonStyle())
-                        
-                        Button(action: {
-                            state.undoLastLog(for: state.currentUser.id)
-                        }) {
+
+                        Button(action: { state.undoLastLog(for: state.currentUser.id) }) {
                             HStack(spacing: 6) {
                                 Image(systemName: "arrow.uturn.backward")
-                                Text("Undo Log")
-                                    .font(.subheadline)
+                                Text("Undo Log").font(.subheadline)
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 12)
@@ -221,14 +238,11 @@ public struct DashboardView: View {
                     }
                 }
                 .padding(.horizontal)
-                
-                // Quick Settlement Simulator & History Trigger
-                Button(action: {
-                    state.triggerSettlement()
-                }) {
+
+                // Settlement Trigger
+                Button(action: { state.triggerSettlement() }) {
                     HStack {
-                        Image(systemName: "scalemass.fill")
-                            .foregroundColor(.orange)
+                        Image(systemName: "scalemass.fill").foregroundColor(.orange)
                         Text("Simulate Sunday Settlement")
                             .font(.subheadline.bold())
                             .foregroundColor(.primary)
@@ -243,34 +257,30 @@ public struct DashboardView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal)
-                
+
                 // Recent Activity Feed
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Recent Logs")
                         .font(.headline)
                         .padding(.horizontal)
-                    
+
                     ForEach(state.logs.prefix(6)) { log in
                         let isMe = log.userId == state.currentUser.id
-                        let name = isMe ? state.currentUser.name : state.friendUser.name
+                        let name  = isMe ? state.currentUser.name      : state.friendUser.name
                         let emoji = isMe ? state.currentUser.avatarEmoji : state.friendUser.avatarEmoji
-                        
+
                         HStack(spacing: 12) {
-                            Text(emoji)
-                                .font(.title3)
+                            Text(emoji).font(.title3)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("\(name) smoked")
-                                    .font(.subheadline.bold())
+                                Text("\(name) smoked").font(.subheadline.bold())
                                 Text(log.timestamp.formatted(date: .omitted, time: .shortened))
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
+                                    .font(.caption2).foregroundColor(.secondary)
                             }
                             Spacer()
                             if log.cravingTimerUsed {
                                 Text("Timer Resisted")
                                     .font(.caption2)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
                                     .background(Color.blue.opacity(0.1))
                                     .foregroundColor(.blue)
                                     .cornerRadius(4)
@@ -285,17 +295,60 @@ public struct DashboardView: View {
             }
             .padding(.vertical)
         }
-        .background(Color.pageBackground)
-        .sheet(isPresented: $state.isCravingTimerActive) {
-            CravingTimerView()
-        }
-        .sheet(isPresented: $state.showingSettlementSheet) {
-            SettlementView()
-        }
     }
 }
 
-// MARK: - Subviews
+// MARK: - Floating Tab Bar
+
+struct FloatingTabBar: View {
+    @Binding var selected: DashboardTab
+    var onAdd: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            tabButton(.home,     icon: "house.fill",    label: "Home")
+            tabButton(.calendar, icon: "calendar",      label: "Calendar")
+
+            // Centre FAB
+            Button(action: onAdd) {
+                Image(systemName: "plus")
+                    .font(.title2.bold())
+                    .foregroundColor(.white)
+                    .frame(width: 52, height: 52)
+                    .background(Color.blue)
+                    .clipShape(Circle())
+                    .shadow(color: .blue.opacity(0.4), radius: 8, y: 4)
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            tabButton(.stats,   icon: "chart.bar.fill", label: "Stats")
+            tabButton(.journal, icon: "book.fill",       label: "Journal")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.15), radius: 20, y: 8)
+        .padding(.horizontal, 24)
+    }
+
+    @ViewBuilder
+    private func tabButton(_ tab: DashboardTab, icon: String, label: String) -> some View {
+        Button(action: { selected = tab }) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                Text(label)
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .foregroundColor(selected == tab ? .blue : .secondary)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - UserWeeklyCard
 
 struct UserWeeklyCard: View {
     let user: UserProfile
@@ -304,51 +357,42 @@ struct UserWeeklyCard: View {
     let limit: Int
     let lastSmoked: String
     let isCurrent: Bool
-    
+
     var progress: Double {
         min(1.0, Double(weekCount) / Double(limit))
     }
-    
+
     var statusColor: Color {
-        if weekCount > limit {
-            return .red
-        } else if weekCount >= Int(Double(limit) * 0.8) {
-            return .orange
-        } else {
-            return .green
-        }
+        if weekCount > limit          { return .red    }
+        if weekCount >= Int(Double(limit) * 0.8) { return .orange }
+        return .green
     }
-    
+
     var body: some View {
         VStack(spacing: 12) {
             HStack {
                 Text(user.avatarEmoji)
-                Text(user.name)
-                    .font(.subheadline.bold())
+                Text(user.name).font(.subheadline.bold())
                 Spacer()
                 if weekCount > limit {
                     Text("+\(weekCount - limit)")
                         .font(.caption2.bold())
                         .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Color.red)
                         .cornerRadius(6)
                 }
             }
-            
-            // Circular progress
+
             ZStack {
                 Circle()
                     .stroke(Color.gray.opacity(0.2), lineWidth: 8)
                     .frame(width: 80, height: 80)
-                
                 Circle()
                     .trim(from: 0.0, to: CGFloat(progress))
                     .stroke(statusColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                     .frame(width: 80, height: 80)
-                
                 VStack(spacing: 0) {
                     Text("\(weekCount)")
                         .font(.system(size: 24, weight: .bold, design: .rounded))
@@ -359,13 +403,11 @@ struct UserWeeklyCard: View {
                 }
             }
             .padding(.vertical, 4)
-            
+
             VStack(spacing: 2) {
-                Text("Today: \(todayCount)")
-                    .font(.caption.bold())
+                Text("Today: \(todayCount)").font(.caption.bold())
                 Text("Last: \(lastSmoked)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .font(.caption2).foregroundColor(.secondary)
             }
         }
         .padding()
