@@ -6,6 +6,7 @@ public final class SignUpViewModel: ObservableObject {
     @Published public var displayName = ""
     @Published public var email = ""
     @Published public var password = ""
+    @Published public var confirmPassword = ""
     
     @Published public var isLoading = false
     @Published public var errorMessage: String?
@@ -16,10 +17,14 @@ public final class SignUpViewModel: ObservableObject {
         self.authService = authService
     }
     
+    public var passwordsMatch: Bool {
+        !password.isEmpty && password == confirmPassword
+    }
+    
     public var isInputValid: Bool {
         let trimmedName = displayName.trimmingCharacters(in: .whitespaces)
         let trimmedEmail = email.trimmingCharacters(in: .whitespaces)
-        return !trimmedName.isEmpty && !trimmedEmail.isEmpty && password.count >= 6
+        return !trimmedName.isEmpty && !trimmedEmail.isEmpty && password.count >= 6 && passwordsMatch
     }
     
     public func signUp() async {
