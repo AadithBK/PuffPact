@@ -49,7 +49,8 @@ public final class FirebaseAuthService: ObservableObject, AuthServiceProtocol {
 
     public func resolveUserRouting(userId: String) async {
         do {
-            let snapshot = try await db.collection("users").document(userId).getDocument()
+            let docRef = db.collection("users").document(userId)
+            let snapshot = try await docRef.getDocument()
             if let data = snapshot.data() {
                 let groupId = data["groupId"] as? String ?? ""
                 let hasProfile = data["smokingProfile"] != nil
@@ -62,6 +63,16 @@ public final class FirebaseAuthService: ObservableObject, AuthServiceProtocol {
                     self.sessionState = .needsQuestionnaire(userId: userId)
                 }
             } else {
+                // If collections were deleted or document is missing, recreate user document from Auth
+                if let currentUser = Auth.auth().currentUser {
+                    try? await docRef.setData([
+                        "id": userId,
+                        "name": currentUser.displayName ?? "User",
+                        "email": currentUser.email ?? "",
+                        "groupId": "",
+                        "createdAt": FieldValue.serverTimestamp()
+                    ], merge: true)
+                }
                 self.sessionState = .needsQuestionnaire(userId: userId)
             }
         } catch {
@@ -84,13 +95,19 @@ public final class FirebaseAuthService: ObservableObject, AuthServiceProtocol {
         try await changeRequest.commitChanges()
 
         // Create user document in Firestore
-        try await db.collection("users").document(result.user.uid).setData([
-            "id": result.user.uid,
-            "name": displayName,
-            "email": email,
-            "groupId": "",
-            "createdAt": FieldValue.serverTimestamp()
-        ])
+        do {
+            try await db.collection("users").document(result.user.uid).setData([
+                "id": result.user.uid,
+                "name": displayName,
+                "email": email,
+                "groupId": "",
+                "createdAt": FieldValue.serverTimestamp()
+            ])
+        } catch {
+            // Roll back Auth user if Firestore document creation fails to prevent orphaned auth accounts
+            try? await result.user.delete()
+            throw error
+        }
 
         self.sessionState = .needsQuestionnaire(userId: result.user.uid)
         return result.user.uid
@@ -118,9 +135,9 @@ public final class FirebaseAuthService: ObservableObject, AuthServiceProtocol {
             "pactIntent": profile.pactIntent.rawValue
         ]
 
-        try await db.collection("users").document(userId).updateData([
+        try await db.collection("users").document(userId).setData([
             "smokingProfile": data
-        ])
+        ], merge: true)
 
         await resolveUserRouting(userId: userId)
     }
@@ -165,9 +182,9 @@ public final class FirebaseAuthService: ObservableObject, AuthServiceProtocol {
             ]
         ])
 
-        try await db.collection("users").document(userId).updateData([
+        try await db.collection("users").document(userId).setData([
             "groupId": code
-        ])
+        ], merge: true)
 
         await resolveUserRouting(userId: userId)
     }
@@ -184,9 +201,9 @@ public final class FirebaseAuthService: ObservableObject, AuthServiceProtocol {
             throw PactError.invalidCode
         }
 
-        try await db.collection("users").document(userId).updateData([
+        try await db.collection("users").document(userId).setData([
             "groupId": cleanedCode
-        ])
+        ], merge: true)
 
         await resolveUserRouting(userId: userId)
     }
