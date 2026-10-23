@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // User profile documents
+    match /users/{userId} {
+      // Allow any logged-in user to read profiles (needed to see partner details)
+      allow read: if request.auth != null;
+      // Allow user to create or update their own profile
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Pacts and their subcollections
+    match /pacts/{pactId} {
+      // Allow authenticated users to view, create, or update pacts
+      allow read, write: if request.auth != null;
+      
+      // Subcollection for smoke logs
+      match /logs/{logId} {
+        allow read, write: if request.auth != null;
+      }
+      
+      // Subcollection for journal entries
+      match /journal/{entryId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+  }
+}
