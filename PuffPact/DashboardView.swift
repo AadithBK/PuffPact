@@ -70,6 +70,10 @@ public struct DashboardView: View {
         .background(Color.pageBackground.ignoresSafeArea())
         .sheet(isPresented: $state.isCravingTimerActive) {
             CravingPauseView()
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+                .presentationBackground(PauseTheme.canvas)
         }
         .sheet(isPresented: $state.showingSettlementSheet) {
             SettlementView()

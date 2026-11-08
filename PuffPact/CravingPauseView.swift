@@ -7,7 +7,7 @@ import Observation
 import SwiftUI
 import UIKit
 
-private enum PauseTheme {
+enum PauseTheme {
     static let canvas = Color(red: 11 / 255, green: 11 / 255, blue: 11 / 255)
     static let surface = Color(red: 23 / 255, green: 23 / 255, blue: 25 / 255)
     static let raised = Color(red: 38 / 255, green: 38 / 255, blue: 41 / 255)
@@ -54,7 +54,7 @@ private final class PauseModel {
 
     var primaryTitle: String {
         switch clock.phase {
-        case .ready: "Start 3-minute pause"
+        case .ready: "Start"
         case .running: "Pause"
         case .paused: "Resume"
         case .complete: "Done"
@@ -71,7 +71,7 @@ private final class PauseModel {
 
     var breathLabel: String {
         switch clock.phase {
-        case .ready: "A moment, just for you"
+        case .ready: "A moment for you"
         case .running: clock.elapsed.truncatingRemainder(dividingBy: 10) < 4
             ? "Breathe in" : "Breathe out"
         case .paused: "A moment to rest"
@@ -157,7 +157,7 @@ private final class PauseModel {
     }
 }
 
-/// Native minimal SwiftUI 3-minute craving pause view.
+/// Native minimal half-page SwiftUI 3-minute craving pause view.
 @MainActor
 public struct CravingPauseView: View {
     @EnvironmentObject var state: AppState
@@ -165,36 +165,42 @@ public struct CravingPauseView: View {
     @State private var model = PauseModel()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     public init() {}
 
     public var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 16) {
-                topBar
-                heading
-                ring
-                quoteCard
+        VStack(spacing: 12) {
+            header
 
-                VStack(spacing: 8) {
-                    if model.undoableLog != nil {
-                        undoBanner
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                    actions
+            Spacer(minLength: 2)
+
+            ring
+
+            Spacer(minLength: 2)
+
+            quoteCard
+
+            Spacer(minLength: 2)
+
+            VStack(spacing: 6) {
+                if model.undoableLog != nil {
+                    undoBanner
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
+                actions
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 12)
-            .padding(.bottom, 16)
-            .frame(maxWidth: 440)
-            .frame(maxWidth: .infinity)
         }
-        .scrollBounceBehavior(.basedOnSize)
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .frame(maxWidth: 440)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PauseTheme.canvas.ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .navigationBarTitleDisplayMode(.inline)
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(24)
+        .presentationBackground(PauseTheme.canvas)
         .onAppear {
             if model.clock.phase == .ready {
                 model.start()
@@ -211,9 +217,7 @@ public struct CravingPauseView: View {
             do {
                 try await Task.sleep(for: .seconds(8))
                 model.dismissUndo()
-            } catch {
-                // Undo, replacement, or leaving the screen cancels expiry.
-            }
+            } catch {}
         }
         .onChange(of: scenePhase) { _, _ in
             model.tick(quotesEnabled: false)
@@ -222,43 +226,32 @@ public struct CravingPauseView: View {
 
     // MARK: - Subviews
 
-    private var topBar: some View {
-        HStack {
-            Capsule()
-                .fill(PauseTheme.secondary.opacity(0.3))
-                .frame(width: 36, height: 5)
-        }
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .trailing) {
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.heading)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(PauseTheme.cream)
+                    .accessibilityAddTraits(.isHeader)
+                Text(model.clock.phase == .complete
+                    ? "You made space for yourself."
+                    : "3 minutes to let the urge pass.")
+                    .font(.caption2)
+                    .foregroundStyle(PauseTheme.secondary)
+            }
+            Spacer()
             Button {
                 dismiss()
                 state.isCravingTimerActive = false
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(PauseTheme.secondary)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
                     .background(PauseTheme.surface, in: Circle())
             }
             .accessibilityLabel("Close")
         }
-        .padding(.top, 4)
-    }
-
-    private var heading: some View {
-        VStack(spacing: 4) {
-            Text(model.heading)
-                .font(.title3.weight(.bold))
-                .tracking(-0.3)
-                .foregroundStyle(PauseTheme.cream)
-                .accessibilityAddTraits(.isHeader)
-            Text(model.clock.phase == .complete
-                ? "Whatever comes next, you made space for yourself."
-                : "Give yourself 3 minutes. The urge will pass.")
-                .font(.caption)
-                .foregroundStyle(PauseTheme.secondary)
-        }
-        .multilineTextAlignment(.center)
     }
 
     private var ring: some View {
@@ -266,17 +259,17 @@ public struct CravingPauseView: View {
             Circle()
                 .fill(PauseTheme.green.opacity(reduceMotion ? 0.03 :
                     0.03 + model.breathExpansion * 0.08))
-                .scaleEffect(reduceMotion ? 0.88 : 0.76 + model.breathExpansion * 0.20)
+                .scaleEffect(reduceMotion ? 0.90 : 0.80 + model.breathExpansion * 0.18)
                 .animation(reduceMotion ? nil : .linear(duration: 0.1),
                            value: model.clock.remaining)
                 .accessibilityHidden(true)
 
-            Circle().stroke(PauseTheme.track, lineWidth: 8)
+            Circle().stroke(PauseTheme.track, lineWidth: 7)
                 .accessibilityHidden(true)
 
             Circle()
                 .trim(from: 0, to: model.clock.phase == .complete ? 1 : model.clock.progress)
-                .stroke(PauseTheme.green, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .stroke(PauseTheme.green, style: StrokeStyle(lineWidth: 7, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(reduceMotion ? nil : .linear(duration: 0.1),
                            value: model.clock.remaining)
@@ -284,54 +277,42 @@ public struct CravingPauseView: View {
 
             timerContents
         }
-        .frame(width: 175, height: 175)
+        .frame(width: 140, height: 140)
         .accessibilityElement(children: .contain)
     }
 
     private var timerContents: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 2) {
             Image(systemName: model.clock.phase == .complete ? "checkmark" : "leaf")
-                .font(.footnote)
+                .font(.caption2)
                 .foregroundStyle(PauseTheme.green.opacity(0.85))
                 .accessibilityHidden(true)
             Text(model.clock.timeLabel)
-                .font(.system(size: 38, weight: .bold, design: .rounded))
+                .font(.system(size: 32, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .foregroundStyle(PauseTheme.cream)
                 .accessibilityLabel("Time remaining")
                 .accessibilityValue(model.clock.timeLabel)
             Text(model.breathLabel)
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(PauseTheme.green)
-            Text(timerSubtitle)
-                .font(.caption2)
-                .foregroundStyle(PauseTheme.secondary)
         }
         .multilineTextAlignment(.center)
     }
 
-    private var timerSubtitle: String {
-        switch model.clock.phase {
-        case .ready: "Ready when you are"
-        case .running: "At your own pace"
-        case .paused: "We’ll be here"
-        case .complete: "One small step forward"
-        }
-    }
-
     private var quoteCard: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Image(systemName: "quote.opening")
                 .font(.caption2)
                 .foregroundStyle(PauseTheme.gold.opacity(0.8))
                 .accessibilityHidden(true)
 
             Text(model.quotes[model.quoteIndex])
-                .font(.footnote.weight(.medium))
+                .font(.caption2.weight(.medium))
                 .foregroundStyle(PauseTheme.cream)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(1)
                 .id(model.quoteIndex)
                 .transition(.opacity)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: model.quoteIndex)
@@ -343,29 +324,29 @@ public struct CravingPauseView: View {
                 .foregroundStyle(PauseTheme.gold.opacity(0.8))
                 .accessibilityHidden(true)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .background(PauseTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(PauseTheme.surface, in: Capsule())
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(PauseTheme.gold.opacity(0.35), lineWidth: 1)
+            Capsule().stroke(PauseTheme.gold.opacity(0.35), lineWidth: 1)
         }
     }
 
     private var actions: some View {
-        VStack(spacing: 8) {
-            Button(action: handlePrimaryAction) {
-                Label(model.primaryTitle, systemImage: model.primarySymbol)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PauseButtonStyle(kind: .primary))
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Button(action: handlePrimaryAction) {
+                    Label(model.primaryTitle, systemImage: model.primarySymbol)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PauseButtonStyle(kind: .primary))
 
-            Button(action: handleLogCigarette) {
-                Label("Log a cigarette", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
+                Button(action: handleLogCigarette) {
+                    Label("Log cigarette", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PauseButtonStyle(kind: .secondary))
             }
-            .buttonStyle(PauseButtonStyle(kind: .secondary))
 
             if model.clock.phase == .running || model.clock.phase == .paused {
                 Button("End session") {
@@ -373,16 +354,16 @@ public struct CravingPauseView: View {
                     dismiss()
                     state.isCravingTimerActive = false
                 }
-                .font(.footnote)
+                .font(.caption)
                 .foregroundStyle(PauseTheme.secondary)
-                .frame(minHeight: 32)
+                .frame(minHeight: 22)
             } else if model.clock.phase == .complete {
                 Button("Take another 3 minutes") {
                     model.start()
                 }
-                .font(.footnote)
+                .font(.caption)
                 .foregroundStyle(PauseTheme.cream)
-                .frame(minHeight: 32)
+                .frame(minHeight: 22)
             }
         }
     }
@@ -390,27 +371,27 @@ public struct CravingPauseView: View {
     private var undoBanner: some View {
         HStack {
             Text("Cigarette logged")
-                .font(.footnote.weight(.medium))
+                .font(.caption.weight(.medium))
             Spacer(minLength: 8)
             undoControls
         }
-        .padding(.leading, 14)
+        .padding(.leading, 12)
         .padding(.trailing, 6)
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
         .foregroundStyle(PauseTheme.cream)
-        .background(PauseTheme.raised, in: RoundedRectangle(cornerRadius: 12))
+        .background(PauseTheme.raised, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var undoControls: some View {
         HStack(spacing: 0) {
             Button("Undo", action: handleUndo)
                 .underline()
-                .font(.footnote.weight(.bold))
-                .frame(minWidth: 50, minHeight: 36)
+                .font(.caption.weight(.bold))
+                .frame(minWidth: 44, minHeight: 30)
             Button(action: model.dismissUndo) {
                 Image(systemName: "xmark")
-                    .font(.caption)
-                    .frame(width: 36, height: 36)
+                    .font(.caption2)
+                    .frame(width: 30, height: 30)
             }
             .accessibilityLabel("Dismiss notification")
         }
@@ -459,16 +440,16 @@ private struct PauseButtonStyle: ButtonStyle {
         configuration.label
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(kind == .primary ? PauseTheme.canvas : PauseTheme.cream)
-            .padding(.horizontal, 16)
-            .frame(height: 48)
+            .padding(.horizontal, 12)
+            .frame(height: 44)
             .background(
                 kind == .primary ? PauseTheme.green :
                     kind == .neutral ? PauseTheme.raised : PauseTheme.surface,
-                in: RoundedRectangle(cornerRadius: 14)
+                in: RoundedRectangle(cornerRadius: 12)
             )
             .overlay {
                 if kind != .primary {
-                    RoundedRectangle(cornerRadius: 14)
+                    RoundedRectangle(cornerRadius: 12)
                         .stroke(PauseTheme.border, lineWidth: 1)
                 }
             }
