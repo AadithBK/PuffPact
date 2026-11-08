@@ -139,7 +139,6 @@ private final class PauseModel {
         let log = Log(date: Date())
         logs.append(log)
         undoableLog = log
-        // A neutral selection tap acknowledges input without rewarding smoking.
         UISelectionFeedbackGenerator().selectionChanged()
         announce("Cigarette logged. Undo is available.")
     }
@@ -158,77 +157,55 @@ private final class PauseModel {
     }
 }
 
-/// Native SwiftUI 3-minute craving pause view.
+/// Native minimal SwiftUI 3-minute craving pause view.
 @MainActor
 public struct CravingPauseView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var model = PauseModel()
-    @State private var sheet: PauseSheet?
-    @State private var sheetWasLog = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @ScaledMetric(relativeTo: .largeTitle) private var timerFontSize = 56
-    @AccessibilityFocusState private var logButtonFocused: Bool
-
-    private enum PauseSheet: String, Identifiable {
-        case log, end
-        var id: String { rawValue }
-    }
 
     public init() {}
 
     public var body: some View {
-        Group {
-            if verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize {
-                // Keep every control reachable in landscape and at large text sizes.
-                ScrollView {
-                    VStack(spacing: 22) {
-                        content
-                        if model.undoableLog != nil { undoBanner }
-                        actions
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 16) {
+                topBar
+                heading
+                ring
+                quoteCard
+
+                VStack(spacing: 8) {
+                    if model.undoableLog != nil {
+                        undoBanner
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    .padding(24)
-                    .frame(maxWidth: 520)
-                    .frame(maxWidth: .infinity)
-                }
-            } else {
-                ScrollView {
-                    content
-                        .padding(24)
-                        .frame(maxWidth: 520)
-                        .frame(maxWidth: .infinity)
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 12) {
-                        if model.undoableLog != nil { undoBanner }
-                        actions
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.top, 14)
-                    .padding(.bottom, 12)
-                    .frame(maxWidth: 520)
-                    .frame(maxWidth: .infinity)
-                    .background(PauseTheme.canvas)
+                    actions
                 }
             }
+            .padding(.horizontal, 22)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
+            .frame(maxWidth: 440)
+            .frame(maxWidth: .infinity)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .background(PauseTheme.canvas.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $sheet, onDismiss: {
-            if sheetWasLog { logButtonFocused = true }
-        }) { presentedSheet in
-            confirmationSheet(presentedSheet)
-                .presentationDetents(dynamicTypeSize.isAccessibilitySize
-                    ? [.large] : [.height(450), .large])
-                .presentationDragIndicator(.visible)
-                .presentationCornerRadius(28)
-                .presentationBackground(PauseTheme.surface)
+        .onAppear {
+            if model.clock.phase == .ready {
+                model.start()
+            }
         }
-        .task { await runClock() }
+        .task {
+            if model.clock.phase == .ready {
+                model.start()
+            }
+            await runClock()
+        }
         .task(id: model.undoableLog?.id) {
             guard model.undoableLog != nil else { return }
             do {
@@ -239,18 +216,19 @@ public struct CravingPauseView: View {
             }
         }
         .onChange(of: scenePhase) { _, _ in
-            // Reconcile the real deadline immediately on returning to the app.
             model.tick(quotesEnabled: false)
         }
     }
+
+    // MARK: - Subviews
 
     private var topBar: some View {
         HStack {
             Capsule()
                 .fill(PauseTheme.secondary.opacity(0.3))
                 .frame(width: 36, height: 5)
-                .frame(maxWidth: .infinity, alignment: .center)
         }
+        .frame(maxWidth: .infinity)
         .overlay(alignment: .trailing) {
             Button {
                 dismiss()
@@ -259,7 +237,7 @@ public struct CravingPauseView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(PauseTheme.secondary)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 28, height: 28)
                     .background(PauseTheme.surface, in: Circle())
             }
             .accessibilityLabel("Close")
@@ -267,124 +245,67 @@ public struct CravingPauseView: View {
         .padding(.top, 4)
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            topBar
-            heading
-            timerCard
-            quoteCard
-            Label {
-                Text("You don’t have to get it perfect.\nJust give yourself this moment.")
-                    .font(.footnote)
-                    .foregroundStyle(PauseTheme.secondary)
-            } icon: {
-                Image(systemName: "checkmark.shield")
-                    .foregroundStyle(PauseTheme.green)
-            }
-            .padding(.horizontal, 4)
-
-            Text("PuffPact · Cravings usually fade in 3–5 minutes")
-                .font(.caption)
-                .foregroundStyle(PauseTheme.secondary)
-                .frame(maxWidth: .infinity)
-        }
-    }
-
     private var heading: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            eyebrow("YOUR MOMENT OF CALM", color: PauseTheme.gold)
+        VStack(spacing: 4) {
             Text(model.heading)
-                .font(.largeTitle.weight(.bold))
-                .tracking(-1)
+                .font(.title3.weight(.bold))
+                .tracking(-0.3)
                 .foregroundStyle(PauseTheme.cream)
                 .accessibilityAddTraits(.isHeader)
             Text(model.clock.phase == .complete
                 ? "Whatever comes next, you made space for yourself."
-                : "Give yourself three minutes. There’s nowhere else you need to be.")
-                .font(.subheadline)
-                .foregroundStyle(PauseTheme.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var timerCard: some View {
-        VStack(spacing: 20) {
-            HStack {
-                eyebrow("A LITTLE ROOM TO BREATHE")
-                Spacer(minLength: 8)
-                Image(systemName: "leaf")
-                    .foregroundStyle(PauseTheme.green)
-                    .accessibilityHidden(true)
-            }
-
-            if dynamicTypeSize.isAccessibilitySize {
-                timerContents
-                    .padding(.vertical, 12)
-            } else {
-                ring
-            }
-
-            Text(model.clock.phase == .complete
-                ? "Be proud of showing up for yourself."
-                : "Inhale a little calm. Exhale a little tension.")
+                : "Give yourself 3 minutes. The urge will pass.")
                 .font(.caption)
                 .foregroundStyle(PauseTheme.secondary)
-                .multilineTextAlignment(.center)
         }
-        .padding(22)
-        .frame(maxWidth: .infinity)
-        .background(PauseTheme.surface, in: RoundedRectangle(cornerRadius: 24))
+        .multilineTextAlignment(.center)
     }
 
     private var ring: some View {
         ZStack {
             Circle()
-                .fill(PauseTheme.green.opacity(reduceMotion ? 0.025 :
-                    0.025 + model.breathExpansion * 0.06))
-                .scaleEffect(reduceMotion ? 0.82 : 0.72 + model.breathExpansion * 0.16)
+                .fill(PauseTheme.green.opacity(reduceMotion ? 0.03 :
+                    0.03 + model.breathExpansion * 0.08))
+                .scaleEffect(reduceMotion ? 0.88 : 0.76 + model.breathExpansion * 0.20)
                 .animation(reduceMotion ? nil : .linear(duration: 0.1),
                            value: model.clock.remaining)
                 .accessibilityHidden(true)
 
-            Circle().stroke(PauseTheme.track, lineWidth: 10)
+            Circle().stroke(PauseTheme.track, lineWidth: 8)
                 .accessibilityHidden(true)
+
             Circle()
                 .trim(from: 0, to: model.clock.phase == .complete ? 1 : model.clock.progress)
-                .stroke(PauseTheme.green, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                .stroke(PauseTheme.green, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(reduceMotion ? nil : .linear(duration: 0.1),
                            value: model.clock.remaining)
                 .accessibilityHidden(true)
 
             timerContents
-                .padding(26)
         }
-        .frame(maxWidth: 240)
-        .aspectRatio(1, contentMode: .fit)
-        .padding(.horizontal, 8)
-        // Do not announce every timer tick or changing breathing cue.
+        .frame(width: 175, height: 175)
         .accessibilityElement(children: .contain)
     }
 
     private var timerContents: some View {
-        VStack(spacing: 9) {
+        VStack(spacing: 4) {
             Image(systemName: model.clock.phase == .complete ? "checkmark" : "leaf")
-                .font(.title3)
-                .foregroundStyle(PauseTheme.green.opacity(0.8))
+                .font(.footnote)
+                .foregroundStyle(PauseTheme.green.opacity(0.85))
                 .accessibilityHidden(true)
             Text(model.clock.timeLabel)
-                .font(.system(size: timerFontSize, weight: .semibold, design: .rounded))
+                .font(.system(size: 38, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.3)
                 .foregroundStyle(PauseTheme.cream)
                 .accessibilityLabel("Time remaining")
                 .accessibilityValue(model.clock.timeLabel)
             Text(model.breathLabel)
-                .font(.footnote)
-                .foregroundStyle(PauseTheme.cream)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(PauseTheme.green)
             Text(timerSubtitle)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(PauseTheme.secondary)
         }
         .multilineTextAlignment(.center)
@@ -400,51 +321,35 @@ public struct CravingPauseView: View {
     }
 
     private var quoteCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                eyebrow("A GENTLE REMINDER", color: PauseTheme.gold)
-                Spacer()
-                Image(systemName: "quote.opening")
-                    .foregroundStyle(PauseTheme.gold)
-                    .accessibilityHidden(true)
-            }
-            // Reserve the tallest quote's intrinsic height, including Dynamic Type.
-            ZStack(alignment: .topLeading) {
-                ForEach(model.quotes, id: \.self) { quote in
-                    Text(quote).hidden().accessibilityHidden(true)
-                }
-                Text(model.quotes[model.quoteIndex])
-                    .id(model.quoteIndex)
-                    .transition(.opacity)
-            }
-            .font(.title3.weight(.medium))
-            .foregroundStyle(PauseTheme.cream)
-            .fixedSize(horizontal: false, vertical: true)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: model.quoteIndex)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(model.quotes[model.quoteIndex])
+        HStack(spacing: 8) {
+            Image(systemName: "quote.opening")
+                .font(.caption2)
+                .foregroundStyle(PauseTheme.gold.opacity(0.8))
+                .accessibilityHidden(true)
 
-            HStack {
-                Text("One moment at a time.")
-                    .font(.caption)
-                    .foregroundStyle(PauseTheme.secondary)
-                Spacer(minLength: 8)
-                HStack(spacing: 4) {
-                    ForEach(model.quotes.indices, id: \.self) { index in
-                        Capsule()
-                            .fill(PauseTheme.gold.opacity(index == model.quoteIndex ? 1 : 0.25))
-                            .frame(width: index == model.quoteIndex ? 12 : 4, height: 4)
-                    }
-                }
+            Text(model.quotes[model.quoteIndex])
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(PauseTheme.cream)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .id(model.quoteIndex)
+                .transition(.opacity)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: model.quoteIndex)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(model.quotes[model.quoteIndex])
+
+            Image(systemName: "quote.closing")
+                .font(.caption2)
+                .foregroundStyle(PauseTheme.gold.opacity(0.8))
                 .accessibilityHidden(true)
-            }
         }
-        .padding(22)
-        .background(PauseTheme.surface, in: RoundedRectangle(cornerRadius: 24))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(PauseTheme.surface, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
-            RoundedRectangle(cornerRadius: 24)
-                .stroke(PauseTheme.gold.opacity(0.5), lineWidth: 1)
-                .accessibilityHidden(true)
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(PauseTheme.gold.opacity(0.35), lineWidth: 1)
         }
     }
 
@@ -456,154 +361,63 @@ public struct CravingPauseView: View {
             }
             .buttonStyle(PauseButtonStyle(kind: .primary))
 
-            if model.clock.phase == .running || model.clock.phase == .paused {
-                Button("End session") {
-                    sheetWasLog = false
-                    sheet = .end
-                }
-                .font(.footnote)
-                .foregroundStyle(PauseTheme.secondary)
-                .frame(minHeight: 44)
-            }
-            if model.clock.phase == .complete {
-                Button("Take another 3 minutes") { model.start() }
-                    .font(.footnote)
-                    .foregroundStyle(PauseTheme.cream)
-                    .frame(minHeight: 44)
-            }
-            Button {
-                sheetWasLog = true
-                logButtonFocused = false
-                sheet = .log
-            } label: {
+            Button(action: handleLogCigarette) {
                 Label("Log a cigarette", systemImage: "plus")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(PauseButtonStyle(kind: .secondary))
-            .accessibilityFocused($logButtonFocused)
 
-            if !dynamicTypeSize.isAccessibilitySize {
-                Text("A cigarette doesn’t erase your progress.")
-                    .font(.caption)
-                    .foregroundStyle(PauseTheme.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 3)
+            if model.clock.phase == .running || model.clock.phase == .paused {
+                Button("End session") {
+                    model.reset()
+                    dismiss()
+                    state.isCravingTimerActive = false
+                }
+                .font(.footnote)
+                .foregroundStyle(PauseTheme.secondary)
+                .frame(minHeight: 32)
+            } else if model.clock.phase == .complete {
+                Button("Take another 3 minutes") {
+                    model.start()
+                }
+                .font(.footnote)
+                .foregroundStyle(PauseTheme.cream)
+                .frame(minHeight: 32)
             }
         }
     }
 
     private var undoBanner: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack {
-                Text("Cigarette logged").font(.subheadline)
-                Spacer(minLength: 8)
-                undoControls
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Cigarette logged").font(.subheadline)
-                undoControls
-            }
+        HStack {
+            Text("Cigarette logged")
+                .font(.footnote.weight(.medium))
+            Spacer(minLength: 8)
+            undoControls
         }
-        .padding(.leading, 16)
+        .padding(.leading, 14)
         .padding(.trailing, 6)
         .padding(.vertical, 4)
         .foregroundStyle(PauseTheme.cream)
-        .background(PauseTheme.raised, in: RoundedRectangle(cornerRadius: 16))
+        .background(PauseTheme.raised, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var undoControls: some View {
         HStack(spacing: 0) {
             Button("Undo", action: handleUndo)
                 .underline()
-                .font(.subheadline.weight(.medium))
-                .frame(minWidth: 60, minHeight: 44)
+                .font(.footnote.weight(.bold))
+                .frame(minWidth: 50, minHeight: 36)
             Button(action: model.dismissUndo) {
                 Image(systemName: "xmark")
-                    .frame(width: 44, height: 44)
+                    .font(.caption)
+                    .frame(width: 36, height: 36)
             }
             .accessibilityLabel("Dismiss notification")
         }
         .tint(PauseTheme.cream)
     }
 
-    private func confirmationSheet(_ kind: PauseSheet) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    Image(systemName: kind == .log ? "plus" : "leaf")
-                        .font(.title2)
-                        .foregroundStyle(PauseTheme.gold)
-                        .frame(width: 52, height: 52)
-                        .background(PauseTheme.raised, in: Circle())
-                        .accessibilityHidden(true)
-                    Spacer()
-                    Button { sheet = nil } label: {
-                        Image(systemName: "xmark")
-                            .foregroundStyle(PauseTheme.secondary)
-                            .frame(width: 44, height: 44)
-                    }
-                    .accessibilityLabel("Close")
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    eyebrow(kind == .log ? "A RECORD, NOT A SETBACK" : "AT YOUR OWN PACE",
-                            color: PauseTheme.gold)
-                    Text(kind == .log ? "Log a cigarette?" : "End this pause?")
-                        .font(.title.weight(.semibold))
-                        .foregroundStyle(PauseTheme.cream)
-                        .accessibilityAddTraits(.isHeader)
-                    Text(kind == .log
-                        ? "Your progress still counts. This is just a moment, not the whole journey."
-                        : "You can come back for another moment whenever you need one.")
-                        .font(.subheadline)
-                        .foregroundStyle(PauseTheme.secondary)
-                }
-                if kind == .log {
-                    HStack {
-                        Text("Time").foregroundStyle(PauseTheme.secondary)
-                        Spacer()
-                        Text("Now")
-                    }
-                    .font(.subheadline)
-                    .padding(.vertical, 12)
-                    .overlay(alignment: .bottom) { Divider() }
-                }
-                VStack(spacing: 6) {
-                    Button {
-                        if kind == .log {
-                            handleLogCigarette()
-                        } else {
-                            model.reset()
-                            dismiss()
-                            state.isCravingTimerActive = false
-                        }
-                        sheet = nil
-                    } label: {
-                        Text(kind == .log ? "Confirm log" : "End session")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(PauseButtonStyle(kind: .neutral))
-
-                    Button(kind == .log ? "Cancel" : "Keep going") { sheet = nil }
-                        .foregroundStyle(PauseTheme.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                    if kind == .log {
-                        Text("This will be logged to your pact.")
-                            .font(.caption)
-                            .foregroundStyle(PauseTheme.secondary)
-                    }
-                }
-            }
-            .padding(24)
-        }
-    }
-
-    private func eyebrow(_ text: String, color: Color = PauseTheme.secondary) -> some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .tracking(1.7)
-            .foregroundStyle(color)
-            .fixedSize(horizontal: false, vertical: true)
-    }
+    // MARK: - Actions
 
     private func handlePrimaryAction() {
         if model.clock.phase == .complete {
@@ -626,7 +440,7 @@ public struct CravingPauseView: View {
 
     private func runClock() async {
         while !Task.isCancelled {
-            model.tick(quotesEnabled: scenePhase == .active && sheet == nil)
+            model.tick(quotesEnabled: scenePhase == .active)
             do {
                 try await Task.sleep(for: .milliseconds(100))
             } catch {
@@ -646,16 +460,15 @@ private struct PauseButtonStyle: ButtonStyle {
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(kind == .primary ? PauseTheme.canvas : PauseTheme.cream)
             .padding(.horizontal, 16)
-            .padding(.vertical, 16)
-            .frame(minHeight: 54)
+            .frame(height: 48)
             .background(
                 kind == .primary ? PauseTheme.green :
                     kind == .neutral ? PauseTheme.raised : PauseTheme.surface,
-                in: RoundedRectangle(cornerRadius: 16)
+                in: RoundedRectangle(cornerRadius: 14)
             )
             .overlay {
                 if kind != .primary {
-                    RoundedRectangle(cornerRadius: 16)
+                    RoundedRectangle(cornerRadius: 14)
                         .stroke(PauseTheme.border, lineWidth: 1)
                 }
             }
