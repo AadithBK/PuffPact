@@ -69,7 +69,7 @@ public struct DashboardView: View {
         }
         .background(Color.pageBackground.ignoresSafeArea())
         .sheet(isPresented: $state.isCravingTimerActive) {
-            CravingTimerView()
+            CravingPauseView()
         }
         .sheet(isPresented: $state.showingSettlementSheet) {
             SettlementView()
