@@ -111,6 +111,12 @@ private final class PauseModel {
         }
     }
 
+    func pause() {
+        if clock.phase == .running {
+            clock.pause(at: Date())
+        }
+    }
+
     func tick(at now: Date = Date(), quotesEnabled: Bool) {
         let wasRunning = clock.phase == .running
         let delta = max(0, min(1, now.timeIntervalSince(previousTick)))
@@ -136,6 +142,9 @@ private final class PauseModel {
     }
 
     func logCigarette() {
+        if clock.phase == .running {
+            clock.pause(at: Date())
+        }
         let log = Log(date: Date())
         logs.append(log)
         undoableLog = log
@@ -165,6 +174,11 @@ public struct CravingPauseView: View {
     @State private var model = PauseModel()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isDismissing = false
+
+    private var isDismissingEffective: Bool {
+        isDismissing || state.isDismissingCravingTimer
+    }
 
     public init() {}
 
@@ -222,6 +236,19 @@ public struct CravingPauseView: View {
         .onChange(of: scenePhase) { _, _ in
             model.tick(quotesEnabled: false)
         }
+        .onChange(of: state.isCravingTimerActive) { wasActive, isActive in
+            if wasActive && !isActive {
+                isDismissing = true
+                model.pause()
+                dismiss()
+            }
+        }
+        .onChange(of: state.logsFor(userId: state.currentUser.id).count) { oldCount, newCount in
+            guard newCount > oldCount, state.isCravingTimerActive, !isDismissingEffective else { return }
+            isDismissing = true
+            model.pause()
+            state.closeCravingTimer(smoothly: true)
+        }
     }
 
     // MARK: - Subviews
@@ -241,8 +268,8 @@ public struct CravingPauseView: View {
             }
             Spacer()
             Button {
+                state.closeCravingTimer(smoothly: false)
                 dismiss()
-                state.isCravingTimerActive = false
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
@@ -251,6 +278,7 @@ public struct CravingPauseView: View {
                     .background(PauseTheme.surface, in: Circle())
             }
             .accessibilityLabel("Close")
+            .disabled(isDismissingEffective)
         }
     }
 
@@ -340,23 +368,27 @@ public struct CravingPauseView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PauseButtonStyle(kind: .primary))
+                .disabled(isDismissingEffective)
 
                 Button(action: handleLogCigarette) {
-                    Label("Log cigarette", systemImage: "plus")
+                    Label(isDismissingEffective ? "Cigarette logged" : "Log cigarette",
+                          systemImage: isDismissingEffective ? "checkmark" : "plus")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(PauseButtonStyle(kind: .secondary))
+                .buttonStyle(PauseButtonStyle(kind: isDismissingEffective ? .primary : .secondary))
+                .disabled(isDismissingEffective)
             }
 
             if model.clock.phase == .running || model.clock.phase == .paused {
                 Button("End session") {
                     model.reset()
+                    state.closeCravingTimer(smoothly: false)
                     dismiss()
-                    state.isCravingTimerActive = false
                 }
                 .font(.caption)
                 .foregroundStyle(PauseTheme.secondary)
                 .frame(minHeight: 22)
+                .disabled(isDismissingEffective)
             } else if model.clock.phase == .complete {
                 Button("Take another 3 minutes") {
                     model.start()
@@ -364,6 +396,7 @@ public struct CravingPauseView: View {
                 .font(.caption)
                 .foregroundStyle(PauseTheme.cream)
                 .frame(minHeight: 22)
+                .disabled(isDismissingEffective)
             }
         }
     }
@@ -402,19 +435,22 @@ public struct CravingPauseView: View {
 
     private func handlePrimaryAction() {
         if model.clock.phase == .complete {
+            state.closeCravingTimer(smoothly: false)
             dismiss()
-            state.isCravingTimerActive = false
         } else {
             model.primaryAction()
         }
     }
 
     private func handleLogCigarette() {
+        guard !isDismissingEffective else { return }
+        isDismissing = true
         model.logCigarette()
         state.logSmoke(for: state.currentUser.id, cravingUsed: true)
     }
 
     private func handleUndo() {
+        isDismissing = false
         model.undo()
         state.undoLastLog(for: state.currentUser.id)
     }

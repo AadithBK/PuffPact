@@ -243,4 +243,125 @@ struct PuffPactTests {
             #expect(uniqueIDs.count == cells.count, "Duplicate IDs detected in month \(m)")
         }
     }
+
+    @Test func testLogSmokeReflectsImmediatelyInAppState() {
+        let state = AppState()
+        let userId = state.currentUser.id
+
+        #expect(state.logsFor(userId: userId).count == 0)
+        #expect(state.todayCount(for: userId) == 0)
+        #expect(state.weekCount(for: userId) == 0)
+
+        state.logSmoke(for: userId, cravingUsed: true)
+
+        #expect(state.logsFor(userId: userId).count == 1)
+        #expect(state.todayCount(for: userId) == 1)
+        #expect(state.weekCount(for: userId) == 1)
+        #expect(state.logs.first?.cravingTimerUsed == true)
+        #expect(state.logs.first?.userId == userId)
+
+        // Undo removes it immediately
+        state.undoLastLog(for: userId)
+        #expect(state.logsFor(userId: userId).count == 0)
+        #expect(state.todayCount(for: userId) == 0)
+        #expect(state.weekCount(for: userId) == 0)
+    }
+
+    @Test func testFriendLogDoesNotAffectCurrentUserLogCount() {
+        let state = AppState()
+        let myId = state.currentUser.id
+        let friendId = state.friendUser.id
+
+        state.logSmoke(for: friendId, cravingUsed: false)
+
+        #expect(state.logsFor(userId: myId).count == 0)
+        #expect(state.logsFor(userId: friendId).count == 1)
+        #expect(state.todayCount(for: myId) == 0)
+        #expect(state.todayCount(for: friendId) == 1)
+    }
+
+    @Test func testLogSmokeClosesCravingTimerWhenActive() async throws {
+        let state = await AppState()
+        let myId = await state.currentUser.id
+
+        await MainActor.run {
+            state.isCravingTimerActive = true
+        }
+
+        #expect(await state.isCravingTimerActive == true)
+        #expect(await state.logsFor(userId: myId).count == 0)
+
+        // Log cigarette while timer is running
+        await MainActor.run {
+            state.logSmoke(for: myId, cravingUsed: true)
+        }
+
+        // Verify immediate UI reflection
+        #expect(await state.logsFor(userId: myId).count == 1)
+        #expect(await state.todayCount(for: myId) == 1)
+        #expect(await state.isDismissingCravingTimer == true)
+
+        // Wait for smooth dismissal
+        try await Task.sleep(for: .milliseconds(550))
+
+        #expect(await state.isCravingTimerActive == false)
+        #expect(await state.isDismissingCravingTimer == false)
+    }
+
+    @Test func testFriendLogDoesNotCloseCravingTimer() async throws {
+        let state = await AppState()
+        let friendId = await state.friendUser.id
+
+        await MainActor.run {
+            state.isCravingTimerActive = true
+        }
+
+        #expect(await state.isCravingTimerActive == true)
+
+        // Friend logs a cigarette
+        await MainActor.run {
+            state.logSmoke(for: friendId, cravingUsed: false)
+        }
+
+        // Current user craving timer dismissal should not be triggered
+        #expect(await state.isDismissingCravingTimer == false)
+
+        try await Task.sleep(for: .milliseconds(550))
+        #expect(await state.isCravingTimerActive == true)
+    }
+
+    @Test func testUndoCancelsCravingTimerDismissal() async throws {
+        let state = await AppState()
+        let myId = await state.currentUser.id
+
+        await MainActor.run {
+            state.isCravingTimerActive = true
+            state.logSmoke(for: myId, cravingUsed: true)
+        }
+
+        #expect(await state.isDismissingCravingTimer == true)
+
+        // Undo immediately
+        await MainActor.run {
+            state.undoLastLog(for: myId)
+        }
+
+        #expect(await state.isDismissingCravingTimer == false)
+        #expect(await state.logsFor(userId: myId).count == 0)
+
+        try await Task.sleep(for: .milliseconds(550))
+        // Timer should still be active because dismissal was cancelled by undo
+        #expect(await state.isCravingTimerActive == true)
+    }
+
+    @Test func testManualCloseCravingTimerImmediatelyCloses() async {
+        let state = await AppState()
+
+        await MainActor.run {
+            state.isCravingTimerActive = true
+            state.closeCravingTimer(smoothly: false)
+            #expect(state.isCravingTimerActive == false)
+            #expect(state.isDismissingCravingTimer == false)
+        }
+    }
 }
