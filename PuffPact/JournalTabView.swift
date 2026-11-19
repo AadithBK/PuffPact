@@ -98,7 +98,8 @@ struct JournalTabView: View {
                     }
                 }
             }
-            .padding(.vertical)
+            .padding(.top)
+            .padding(.bottom, 100)
         }
         .background(Color.pageBackground.ignoresSafeArea())
     }

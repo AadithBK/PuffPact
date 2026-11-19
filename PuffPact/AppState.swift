@@ -20,12 +20,15 @@ public class AppState: ObservableObject {
     @Published public var isCravingTimerActive: Bool = false
     @Published public var showingSettlementSheet: Bool = false
     @Published public var latestSettlement: SettlementBreakdown? = nil
+    @Published public private(set) var isDismissingCravingTimer: Bool = false
 
-    private let db = Firestore.firestore()
+    private var timerDismissalTask: Task<Void, Never>?
+    private lazy var db = Firestore.firestore()
     private var pactListener: ListenerRegistration?
     private var usersListener: ListenerRegistration?
     private var logsListener: ListenerRegistration?
     private var journalListener: ListenerRegistration?
+    private var hasReceivedFirstLogsSnapshot: Bool = false
     
     private var activeUserId: String = ""
     private var activeGroupId: String = ""
@@ -97,16 +100,38 @@ public class AppState: ObservableObject {
     
     private func listenToLogs(groupId: String) {
         logsListener?.remove()
+        hasReceivedFirstLogsSnapshot = false
         logsListener = db.collection("pacts").document(groupId).collection("logs").order(by: "timestamp", descending: true).addSnapshotListener { [weak self] snapshot, error in
             guard let self = self, let docs = snapshot?.documents, error == nil else { return }
 
-            self.logs = docs.compactMap { doc -> SmokeLog? in
+            let isFirstSnapshot = !self.hasReceivedFirstLogsSnapshot
+            self.hasReceivedFirstLogsSnapshot = true
+
+            let mappedLogs = docs.compactMap { doc -> SmokeLog? in
                 let data = doc.data()
-                guard let userId = data["userId"] as? String,
-                      let stamp = data["timestamp"] as? Timestamp else { return nil }
+                guard let userId = data["userId"] as? String else { return nil }
+                let stamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
                 let craving = data["cravingTimerUsed"] as? Bool ?? false
 
-                return SmokeLog(id: doc.documentID, userId: userId, timestamp: stamp.dateValue(), cravingTimerUsed: craving)
+                return SmokeLog(id: doc.documentID, userId: userId, timestamp: stamp, cravingTimerUsed: craving)
+            }
+            
+            let applyLogs = {
+                let prevCurrentUserLogCount = self.logsFor(userId: self.currentUser.id).count
+                self.logs = mappedLogs
+                let newCurrentUserLogCount = self.logsFor(userId: self.currentUser.id).count
+
+                if !isFirstSnapshot, newCurrentUserLogCount > prevCurrentUserLogCount, self.isCravingTimerActive {
+                    self.closeCravingTimer(smoothly: true)
+                }
+            }
+
+            if Thread.isMainThread {
+                applyLogs()
+            } else {
+                DispatchQueue.main.async {
+                    applyLogs()
+                }
             }
         }
     }
@@ -205,11 +230,54 @@ public class AppState: ObservableObject {
     }
     
     // MARK: - Actions
+
+    @MainActor
+    public func closeCravingTimer(smoothly: Bool = true, delayMs: Int = 450) {
+        guard isCravingTimerActive, !isDismissingCravingTimer else { return }
+
+        timerDismissalTask?.cancel()
+
+        if smoothly {
+            isDismissingCravingTimer = true
+            timerDismissalTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(delayMs))
+                guard !Task.isCancelled, self.isCravingTimerActive else {
+                    self.isDismissingCravingTimer = false
+                    return
+                }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    self.isCravingTimerActive = false
+                }
+                self.isDismissingCravingTimer = false
+                self.timerDismissalTask = nil
+            }
+        } else {
+            timerDismissalTask = nil
+            isDismissingCravingTimer = false
+            withAnimation(.easeInOut(duration: 0.25)) {
+                self.isCravingTimerActive = false
+            }
+        }
+    }
     
     public func logSmoke(for userId: String, cravingUsed: Bool = false) {
+        let logId = UUID().uuidString
+        let optimisticLog = SmokeLog(id: logId, userId: userId, timestamp: Date(), cravingTimerUsed: cravingUsed)
+        
+        // Optimistically insert log so UI immediately reflects the new cigarette
+        if !logs.contains(where: { $0.id == logId }) {
+            logs.insert(optimisticLog, at: 0)
+        }
+
+        // When the current user logs a cigarette and it reflects in the UI/state, close the craving timer smoothly
+        if (userId == currentUser.id || userId == activeUserId) && isCravingTimerActive {
+            Task { @MainActor in
+                self.closeCravingTimer(smoothly: true)
+            }
+        }
+
         guard !activeGroupId.isEmpty else { return }
         
-        let logId = UUID().uuidString
         db.collection("pacts").document(activeGroupId).collection("logs").document(logId).setData([
             "id": logId,
             "userId": userId,
@@ -225,9 +293,17 @@ public class AppState: ObservableObject {
     }
     
     public func undoLastLog(for userId: String) {
-        guard !activeGroupId.isEmpty else { return }
-        if let lastLog = logs.first(where: { $0.userId == userId }) {
-            db.collection("pacts").document(activeGroupId).collection("logs").document(lastLog.id).delete()
+        if userId == currentUser.id || userId == activeUserId {
+            timerDismissalTask?.cancel()
+            timerDismissalTask = nil
+            isDismissingCravingTimer = false
+        }
+        if let index = logs.firstIndex(where: { $0.userId == userId }) {
+            let logToRemove = logs[index]
+            logs.remove(at: index)
+            if !activeGroupId.isEmpty {
+                db.collection("pacts").document(activeGroupId).collection("logs").document(logToRemove.id).delete()
+            }
         }
     }
     

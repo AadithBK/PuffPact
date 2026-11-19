@@ -86,7 +86,8 @@ struct StatsTabView: View {
                 }
                 .padding(.horizontal)
             }
-            .padding(.vertical)
+            .padding(.top)
+            .padding(.bottom, 100)
         }
         .background(Color.pageBackground.ignoresSafeArea())
     }

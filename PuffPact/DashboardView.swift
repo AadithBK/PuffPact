@@ -23,7 +23,7 @@ private enum PuffTheme {
 // MARK: - Tab Enum
 
 enum DashboardTab: String, CaseIterable {
-    case home, calendar, stats, journal
+    case home, calendar, stats, journal, profile
 }
 
 // MARK: - Dashboard Root
@@ -66,10 +66,10 @@ public struct DashboardView: View {
                 case .calendar: CalendarTabView()
                 case .stats:    StatsTabView()
                 case .journal:  JournalTabView()
+                case .profile:  ProfileTabView(groupId: groupId)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 94)
 
             FloatingTabBar(selected: $selectedTab) {
                 state.isCravingTimerActive = true
@@ -86,6 +86,10 @@ public struct DashboardView: View {
         }
         .sheet(isPresented: $state.showingSettlementSheet) {
             SettlementView()
+        }
+        .onChange(of: state.logsFor(userId: state.currentUser.id).count) { oldCount, newCount in
+            guard newCount > oldCount, state.isCravingTimerActive else { return }
+            state.closeCravingTimer(smoothly: true)
         }
     }
 
@@ -110,7 +114,7 @@ public struct DashboardView: View {
             }
             .padding(.horizontal, 22)
             .padding(.top, 14)
-            .padding(.bottom, 24)
+            .padding(.bottom, 100)
         }
         .background(Color.black.ignoresSafeArea())
     }
@@ -336,7 +340,7 @@ public struct DashboardView: View {
     private var quickActions: some View {
         VStack(spacing: 10) {
             Button {
-                state.logSmoke(for: state.currentUser.id)
+                state.isCravingTimerActive = true
             } label: {
                 HStack(spacing: 9) {
                     Image(systemName: "plus")
@@ -502,16 +506,18 @@ struct FloatingTabBar: View {
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity)
             .accessibilityLabel("Start craving pause")
-            tabButton(.stats, icon: "chart.bar.fill")
             tabButton(.journal, icon: "book.fill")
+            tabButton(.profile, icon: "person.fill")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
-        .environment(\.colorScheme, .dark)
-        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-        .clipShape(Capsule())
-        .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+        )
+        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
         .padding(.horizontal, 22)
     }
 
