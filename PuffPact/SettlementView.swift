@@ -20,6 +20,7 @@ public struct SettlementView: View {
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Close") {
+                            state.archiveSettlement(isSettled: false)
                             state.showingSettlementSheet = false
                         }
                     }
@@ -117,6 +118,7 @@ public struct SettlementView: View {
                     if settlement.amountOwed > 0 {
                         VStack(spacing: 10) {
                             Button(action: {
+                                state.archiveSettlement(isSettled: true)
                                 state.showingSettlementSheet = false
                             }) {
                                 HStack {
@@ -133,6 +135,7 @@ public struct SettlementView: View {
                             .buttonStyle(PlainButtonStyle())
                             
                             Button(action: {
+                                state.archiveSettlement(isSettled: false)
                                 state.showingSettlementSheet = false
                             }) {
                                 Text("Dismiss")
@@ -144,6 +147,7 @@ public struct SettlementView: View {
                         .padding(.horizontal)
                     } else {
                         Button(action: {
+                            state.archiveSettlement(isSettled: true)
                             state.showingSettlementSheet = false
                         }) {
                             Text("Done")

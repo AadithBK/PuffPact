@@ -134,25 +134,13 @@ public struct DashboardView: View {
 
             Spacer()
 
-            Button {
-                do { try authService.signOut() }
-                catch { print("Sign out error: \(error)") }
-            } label: {
-                Image(systemName: "bell.badge.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 42, height: 42)
-                    .background(PuffTheme.card.opacity(0.92))
-                    .clipShape(RoundedRectangle(cornerRadius: 13))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Sign out")
-            .contextMenu {
-                Button("Sign out", role: .destructive) {
-                    do { try authService.signOut() }
-                    catch { print("Sign out error: \(error)") }
-                }
-            }
+            // Static notification icon (notifications coming in a future update)
+            Image(systemName: "bell.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.white.opacity(0.6))
+                .frame(width: 42, height: 42)
+                .background(PuffTheme.card.opacity(0.92))
+                .clipShape(RoundedRectangle(cornerRadius: 13))
         }
     }
 

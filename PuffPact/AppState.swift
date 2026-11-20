@@ -21,6 +21,8 @@ public class AppState: ObservableObject {
     @Published public var showingSettlementSheet: Bool = false
     @Published public var latestSettlement: SettlementBreakdown? = nil
     @Published public private(set) var isDismissingCravingTimer: Bool = false
+    @Published public var settlements: [SettlementBreakdown] = []
+    @Published public var pactCreatedAt: Date? = nil
 
     private var timerDismissalTask: Task<Void, Never>?
     private lazy var db = Firestore.firestore()
@@ -29,9 +31,10 @@ public class AppState: ObservableObject {
     private var logsListener: ListenerRegistration?
     private var journalListener: ListenerRegistration?
     private var hasReceivedFirstLogsSnapshot: Bool = false
+    private var settlementsListener: ListenerRegistration?
     
-    private var activeUserId: String = ""
-    private var activeGroupId: String = ""
+    public var activeUserId: String = ""
+    public var activeGroupId: String = ""
     
     public init() {
         // Safe dummy initialization to avoid crashes before configuration
@@ -49,18 +52,23 @@ public class AppState: ObservableObject {
         listenToUsers(groupId: groupId, userId: userId)
         listenToLogs(groupId: groupId)
         listenToJournal(groupId: groupId)
+        listenToSettlements(groupId: groupId)
     }
 
     private func listenToPact(groupId: String) {
         pactListener?.remove()
         pactListener = db.collection("pacts").document(groupId).addSnapshotListener { [weak self] snapshot, error in
             guard let self = self, let data = snapshot?.data(), error == nil else { return }
+            if let stamp = data["createdAt"] as? Timestamp {
+                self.pactCreatedAt = stamp.dateValue()
+            }
             if let configData = data["config"] as? [String: Any] {
                 let limit = configData["individualWeeklyLimit"] as? Int ?? self.pactConfig.individualWeeklyLimit
                 let cost = configData["costPerStick"] as? Double ?? self.pactConfig.costPerStick
                 let reset = configData["resetDayOfWeek"] as? Int ?? self.pactConfig.resetDayOfWeek
                 self.pactConfig = PactConfig(individualWeeklyLimit: limit, costPerStick: cost, currencySymbol: self.pactConfig.currencySymbol, resetDayOfWeek: reset)
             }
+            self.checkAndAutoTriggerSettlement()
         }
     }
     
@@ -133,6 +141,7 @@ public class AppState: ObservableObject {
                     applyLogs()
                 }
             }
+            self.checkAndAutoTriggerSettlement()
         }
     }
 
@@ -149,6 +158,64 @@ public class AppState: ObservableObject {
                           let stamp = data["timestamp"] as? Timestamp else { return nil }
                     return JournalEntry(id: doc.documentID, userId: userId, text: text, timestamp: stamp.dateValue())
                 }
+            }
+    }
+
+    private func listenToSettlements(groupId: String) {
+        settlementsListener?.remove()
+        settlementsListener = db.collection("pacts").document(groupId).collection("settlements")
+            .order(by: "timestamp", descending: true)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self = self, let docs = snapshot?.documents, error == nil else { return }
+                self.settlements = docs.compactMap { doc -> SettlementBreakdown? in
+                    let data = doc.data()
+                    guard let rawScenario = data["scenario"] as? String,
+                          let scenario = SettlementScenario(rawValue: rawScenario),
+                          let limit = data["limit"] as? Int,
+                          let cost = data["costPerStick"] as? Double,
+                          let currency = data["currency"] as? String,
+                          let userAName = data["userAName"] as? String,
+                          let userBName = data["userBName"] as? String,
+                          let userACount = data["userACount"] as? Int,
+                          let userBCount = data["userBCount"] as? Int,
+                          let userAExcess = data["userAExcess"] as? Int,
+                          let userBExcess = data["userBExcess"] as? Int,
+                          let penalizedSticks = data["penalizedSticks"] as? Int,
+                          let amountOwed = data["amountOwed"] as? Double,
+                          let summaryMessage = data["summaryMessage"] as? String else {
+                        return nil
+                    }
+                    let winner = data["winnerName"] as? String
+                    let loser = data["loserName"] as? String
+                    let isSettled = data["isSettled"] as? Bool ?? false
+                    let stamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
+                    let cycleStart = (data["cycleStartDate"] as? Timestamp)?.dateValue()
+                    let cycleEnd = (data["cycleEndDate"] as? Timestamp)?.dateValue()
+
+                    return SettlementBreakdown(
+                        id: doc.documentID,
+                        scenario: scenario,
+                        limit: limit,
+                        costPerStick: cost,
+                        currency: currency,
+                        userAName: userAName,
+                        userBName: userBName,
+                        userACount: userACount,
+                        userBCount: userBCount,
+                        userAExcess: userAExcess,
+                        userBExcess: userBExcess,
+                        winnerName: winner,
+                        loserName: loser,
+                        penalizedSticks: penalizedSticks,
+                        amountOwed: amountOwed,
+                        summaryMessage: summaryMessage,
+                        isSettled: isSettled,
+                        timestamp: stamp,
+                        cycleStartDate: cycleStart,
+                        cycleEndDate: cycleEnd
+                    )
+                }
+                self.checkAndAutoTriggerSettlement()
             }
     }
 
@@ -174,12 +241,29 @@ public class AppState: ObservableObject {
         return logs.filter { $0.userId == userId && calendar.isDateInToday($0.timestamp) }.count
     }
     
-    public func weekCount(for userId: String) -> Int {
+    // MARK: - Weekly Cycle & Date Math
+
+    public func currentCycleStartDate(from referenceDate: Date = Date(), resetDayOfWeek: Int? = nil) -> Date {
         let calendar = Calendar.current
-        guard let startOfWeek = calendar.dateInterval(of: .weekOfYear, for: Date())?.start else {
-            return logs.filter { $0.userId == userId }.count
-        }
-        return logs.filter { $0.userId == userId && $0.timestamp >= startOfWeek }.count
+        let startOfToday = calendar.startOfDay(for: referenceDate)
+        let currentWeekday = calendar.component(.weekday, from: startOfToday) // 1 = Sunday, 2 = Monday, ...
+        let targetWeekday = resetDayOfWeek ?? pactConfig.resetDayOfWeek
+        let daysToSubtract = (currentWeekday - targetWeekday + 7) % 7
+        return calendar.date(byAdding: .day, value: -daysToSubtract, to: startOfToday) ?? startOfToday
+    }
+
+    public func previousCycleDateInterval(from referenceDate: Date = Date(), resetDayOfWeek: Int? = nil) -> (start: Date, end: Date) {
+        let calendar = Calendar.current
+        let currentStart = currentCycleStartDate(from: referenceDate, resetDayOfWeek: resetDayOfWeek)
+        let prevStart = calendar.date(byAdding: .day, value: -7, to: currentStart) ?? currentStart.addingTimeInterval(-7 * 86400)
+        return (prevStart, currentStart)
+    }
+
+    public func weekCount(for userId: String, on date: Date = Date()) -> Int {
+        let calendar = Calendar.current
+        let cycleStart = currentCycleStartDate(from: date)
+        let cycleEnd = calendar.date(byAdding: .day, value: 7, to: cycleStart) ?? cycleStart.addingTimeInterval(7 * 86400)
+        return logs.filter { $0.userId == userId && $0.timestamp >= cycleStart && $0.timestamp < cycleEnd }.count
     }
     
     public func excessCount(for userId: String) -> Int {
@@ -205,28 +289,21 @@ public class AppState: ObservableObject {
     public var currentProjectedOwedSummary: (loserName: String, winnerName: String, amount: Double, penalizedSticks: Int)? {
         let aWeek = weekCount(for: currentUser.id)
         let bWeek = weekCount(for: friendUser.id)
-        let limit = pactConfig.individualWeeklyLimit
-        let cost = pactConfig.costPerStick
-        
-        let aExceeded = aWeek > limit
-        let bExceeded = bWeek > limit
-        
-        if !aExceeded && !bExceeded { return nil }
-        
-        if aExceeded && !bExceeded {
-            let excess = aWeek - limit
-            return (currentUser.name, friendUser.name, Double(excess) * cost, excess)
+        let breakdown = PuffPactEngine.evaluateSettlement(
+            userAName: currentUser.name,
+            userACount: aWeek,
+            userBName: friendUser.name,
+            userBCount: bWeek,
+            limit: pactConfig.individualWeeklyLimit,
+            costPerStick: pactConfig.costPerStick,
+            currencySymbol: pactConfig.currencySymbol
+        )
+        guard breakdown.amountOwed > 0,
+              let loser = breakdown.loserName,
+              let winner = breakdown.winnerName else {
+            return nil
         }
-        if !aExceeded && bExceeded {
-            let excess = bWeek - limit
-            return (friendUser.name, currentUser.name, Double(excess) * cost, excess)
-        }
-        
-        if aWeek == bWeek { return nil }
-        let diff = abs(aWeek - bWeek)
-        let loser = aWeek > bWeek ? currentUser.name : friendUser.name
-        let winner = aWeek > bWeek ? friendUser.name : currentUser.name
-        return (loser, winner, Double(diff) * cost, diff)
+        return (loser, winner, breakdown.amountOwed, breakdown.penalizedSticks)
     }
     
     // MARK: - Actions
@@ -318,59 +395,91 @@ public class AppState: ObservableObject {
         let cost = pactConfig.costPerStick
         let sym = pactConfig.currencySymbol
         
-        let excessA = max(0, aCount - limit)
-        let excessB = max(0, bCount - limit)
-        
-        if aCount == bCount {
-            latestSettlement = SettlementBreakdown(
-                scenario: .case4Tie, limit: limit, costPerStick: cost, currency: sym,
-                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
-                userAExcess: excessA, userBExcess: excessB, winnerName: nil, loserName: nil,
-                penalizedSticks: 0, amountOwed: 0.0,
-                summaryMessage: "Both smoked \(aCount) cigarettes. A perfect tie with \(sym)0.00 owed."
-            )
-        } else if aCount <= limit && bCount <= limit {
-            let winner = aCount < bCount ? currentUser.name : friendUser.name
-            let loser = aCount < bCount ? friendUser.name : currentUser.name
-            latestSettlement = SettlementBreakdown(
-                scenario: .case3NeitherExceeded, limit: limit, costPerStick: cost, currency: sym,
-                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
-                userAExcess: 0, userBExcess: 0, winnerName: winner, loserName: loser,
-                penalizedSticks: 0, amountOwed: 0.0,
-                summaryMessage: "Both stay under \(limit)! \(winner) takes the victory for discipline."
-            )
-        } else if aCount > limit && bCount <= limit {
-            let owed = Double(excessA) * cost
-            latestSettlement = SettlementBreakdown(
-                scenario: .case1OneExceeded, limit: limit, costPerStick: cost, currency: sym,
-                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
-                userAExcess: excessA, userBExcess: 0, winnerName: friendUser.name, loserName: currentUser.name,
-                penalizedSticks: excessA, amountOwed: owed,
-                summaryMessage: "\(currentUser.name) exceeded limit by \(excessA) sticks and owes \(sym)\(String(format: "%.2f", owed))."
-            )
-        } else if aCount <= limit && bCount > limit {
-            let owed = Double(excessB) * cost
-            latestSettlement = SettlementBreakdown(
-                scenario: .case1OneExceeded, limit: limit, costPerStick: cost, currency: sym,
-                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
-                userAExcess: 0, userBExcess: excessB, winnerName: currentUser.name, loserName: friendUser.name,
-                penalizedSticks: excessB, amountOwed: owed,
-                summaryMessage: "\(friendUser.name) exceeded limit by \(excessB) sticks and owes \(sym)\(String(format: "%.2f", owed))."
-            )
-        } else {
-            let diff = abs(aCount - bCount)
-            let winner = aCount < bCount ? currentUser.name : friendUser.name
-            let loser = aCount < bCount ? friendUser.name : currentUser.name
-            let owed = Double(diff) * cost
-            latestSettlement = SettlementBreakdown(
-                scenario: .case2BothExceeded, limit: limit, costPerStick: cost, currency: sym,
-                userAName: currentUser.name, userBName: friendUser.name, userACount: aCount, userBCount: bCount,
-                userAExcess: excessA, userBExcess: excessB, winnerName: winner, loserName: loser,
-                penalizedSticks: diff, amountOwed: owed,
-                summaryMessage: "Both exceeded limit. \(loser) owes \(sym)\(String(format: "%.2f", owed))."
-            )
-        }
+        latestSettlement = PuffPactEngine.evaluateSettlement(
+            userAName: currentUser.name,
+            userACount: aCount,
+            userBName: friendUser.name,
+            userBCount: bCount,
+            limit: limit,
+            costPerStick: cost,
+            currencySymbol: sym
+        )
         
         showingSettlementSheet = true
+    }
+
+    public func archiveSettlement(_ settlement: SettlementBreakdown? = nil, isSettled: Bool = true) {
+        guard !activeGroupId.isEmpty else { return }
+        guard var target = settlement ?? latestSettlement else { return }
+
+        target.isSettled = isSettled
+        latestSettlement = target
+
+        let docRef = db.collection("pacts").document(activeGroupId).collection("settlements").document(target.id)
+
+        var data: [String: Any] = [
+            "id": target.id,
+            "scenario": target.scenario.rawValue,
+            "limit": target.limit,
+            "costPerStick": target.costPerStick,
+            "currency": target.currency,
+            "userAName": target.userAName,
+            "userBName": target.userBName,
+            "userACount": target.userACount,
+            "userBCount": target.userBCount,
+            "userAExcess": target.userAExcess,
+            "userBExcess": target.userBExcess,
+            "penalizedSticks": target.penalizedSticks,
+            "amountOwed": target.amountOwed,
+            "summaryMessage": target.summaryMessage,
+            "isSettled": isSettled,
+            "timestamp": Timestamp(date: target.timestamp)
+        ]
+        if let winner = target.winnerName { data["winnerName"] = winner }
+        if let loser = target.loserName { data["loserName"] = loser }
+        if let start = target.cycleStartDate { data["cycleStartDate"] = Timestamp(date: start) }
+        if let end = target.cycleEndDate { data["cycleEndDate"] = Timestamp(date: end) }
+
+        docRef.setData(data)
+    }
+
+    public func checkAndAutoTriggerSettlement(now: Date = Date()) {
+        guard !activeGroupId.isEmpty else { return }
+        let (prevStart, prevEnd) = previousCycleDateInterval(from: now)
+
+        // Only trigger if the pact was active during the previous cycle:
+        // Either the pact was created before prevEnd, OR there are logs prior to prevEnd
+        let pactWasActive = (pactCreatedAt != nil && pactCreatedAt! < prevEnd) ||
+                            logs.contains(where: { $0.timestamp < prevEnd })
+        guard pactWasActive else { return }
+
+        // A previous cycle is considered settled if:
+        // 1. A settlement exists explicitly recorded for this cycleEndDate, OR
+        // 2. A settlement was recorded on or after prevEnd
+        let alreadySettled = settlements.contains { settlement in
+            if let cycleEnd = settlement.cycleEndDate {
+                return cycleEnd == prevEnd
+            }
+            return settlement.timestamp >= prevEnd
+        }
+
+        if !alreadySettled && !showingSettlementSheet {
+            let prevLogs = logs.filter { $0.timestamp >= prevStart && $0.timestamp < prevEnd }
+            let aCount = prevLogs.filter { $0.userId == currentUser.id }.count
+            let bCount = prevLogs.filter { $0.userId == friendUser.id }.count
+            var settlement = PuffPactEngine.evaluateSettlement(
+                userAName: currentUser.name,
+                userACount: aCount,
+                userBName: friendUser.name,
+                userBCount: bCount,
+                limit: pactConfig.individualWeeklyLimit,
+                costPerStick: pactConfig.costPerStick,
+                currencySymbol: pactConfig.currencySymbol
+            )
+            settlement.cycleStartDate = prevStart
+            settlement.cycleEndDate = prevEnd
+            latestSettlement = settlement
+            showingSettlementSheet = true
+        }
     }
 }

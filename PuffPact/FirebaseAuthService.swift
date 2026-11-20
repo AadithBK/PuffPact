@@ -175,6 +175,7 @@ public final class FirebaseAuthService: ObservableObject, AuthServiceProtocol {
             "id": code,
             "name": name,
             "createdAt": FieldValue.serverTimestamp(),
+            "memberIds": [userId],
             "config": [
                 "individualWeeklyLimit": weeklyLimit,
                 "costPerStick": costPerStick,
@@ -200,6 +201,10 @@ public final class FirebaseAuthService: ObservableObject, AuthServiceProtocol {
         guard doc.exists else {
             throw PactError.invalidCode
         }
+
+        try await db.collection("pacts").document(cleanedCode).setData([
+            "memberIds": FieldValue.arrayUnion([userId])
+        ], merge: true)
 
         try await db.collection("users").document(userId).setData([
             "groupId": cleanedCode

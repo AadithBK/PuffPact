@@ -364,4 +364,452 @@ struct PuffPactTests {
             #expect(state.isDismissingCravingTimer == false)
         }
     }
+
+    // MARK: - Settlement Engine Tests (Bug 2)
+
+    @Test func testPuffPactEngineSettlementScenarios() {
+        let limit = 20
+        let cost = 18.0
+
+        // Case 4: Perfect Tie
+        let tie = PuffPactEngine.evaluateSettlement(
+            userAName: "Alice", userACount: 15,
+            userBName: "Bob", userBCount: 15,
+            limit: limit, costPerStick: cost
+        )
+        #expect(tie.scenario == .case4Tie)
+        #expect(tie.amountOwed == 0.0)
+        #expect(tie.penalizedSticks == 0)
+        #expect(tie.winnerName == nil)
+        #expect(tie.loserName == nil)
+
+        // Case 3: Both Under Limit
+        let neither = PuffPactEngine.evaluateSettlement(
+            userAName: "Alice", userACount: 12,
+            userBName: "Bob", userBCount: 16,
+            limit: limit, costPerStick: cost
+        )
+        #expect(neither.scenario == .case3NeitherExceeded)
+        #expect(neither.amountOwed == 0.0)
+        #expect(neither.penalizedSticks == 0)
+        #expect(neither.winnerName == "Alice")
+        #expect(neither.loserName == "Bob")
+
+        // Case 1: Alice Exceeded, Bob Under
+        let aliceExceeded = PuffPactEngine.evaluateSettlement(
+            userAName: "Alice", userACount: 25,
+            userBName: "Bob", userBCount: 18,
+            limit: limit, costPerStick: cost
+        )
+        #expect(aliceExceeded.scenario == .case1OneExceeded)
+        #expect(aliceExceeded.userAExcess == 5)
+        #expect(aliceExceeded.userBExcess == 0)
+        #expect(aliceExceeded.penalizedSticks == 5)
+        #expect(aliceExceeded.amountOwed == 5.0 * cost)
+        #expect(aliceExceeded.winnerName == "Bob")
+        #expect(aliceExceeded.loserName == "Alice")
+
+        // Case 1: Bob Exceeded, Alice Under
+        let bobExceeded = PuffPactEngine.evaluateSettlement(
+            userAName: "Alice", userACount: 10,
+            userBName: "Bob", userBCount: 23,
+            limit: limit, costPerStick: cost
+        )
+        #expect(bobExceeded.scenario == .case1OneExceeded)
+        #expect(bobExceeded.userAExcess == 0)
+        #expect(bobExceeded.userBExcess == 3)
+        #expect(bobExceeded.penalizedSticks == 3)
+        #expect(bobExceeded.amountOwed == 3.0 * cost)
+        #expect(bobExceeded.winnerName == "Alice")
+        #expect(bobExceeded.loserName == "Bob")
+
+        // Case 2: Both Exceeded Limit
+        let bothExceeded = PuffPactEngine.evaluateSettlement(
+            userAName: "Alice", userACount: 30,
+            userBName: "Bob", userBCount: 22,
+            limit: limit, costPerStick: cost
+        )
+        #expect(bothExceeded.scenario == .case2BothExceeded)
+        #expect(bothExceeded.userAExcess == 10)
+        #expect(bothExceeded.userBExcess == 2)
+        #expect(bothExceeded.penalizedSticks == 8)
+        #expect(bothExceeded.amountOwed == 8.0 * cost)
+        #expect(bothExceeded.winnerName == "Bob")
+        #expect(bothExceeded.loserName == "Alice")
+    }
+
+    // MARK: - Weekly Cycle & Reset Tests (Bug 3)
+
+    @Test func testCurrentCycleStartDateMondayReset() {
+        let appState = AppState()
+        appState.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 2) // Monday
+
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        comps.hour = 14
+        comps.minute = 30
+
+        // Nov 16, 2026 is a Monday (weekday 2)
+        comps.day = 16
+        if let mondayDate = cal.date(from: comps) {
+            let cycleStart = appState.currentCycleStartDate(from: mondayDate)
+            #expect(cal.component(.weekday, from: cycleStart) == 2)
+            #expect(cal.component(.day, from: cycleStart) == 16)
+        }
+
+        // Nov 18, 2026 is a Wednesday (weekday 4) -> cycle start should still be Monday Nov 16
+        comps.day = 18
+        if let wedDate = cal.date(from: comps) {
+            let cycleStart = appState.currentCycleStartDate(from: wedDate)
+            #expect(cal.component(.weekday, from: cycleStart) == 2)
+            #expect(cal.component(.day, from: cycleStart) == 16)
+        }
+
+        // Nov 22, 2026 is a Sunday (weekday 1) -> cycle start should still be Monday Nov 16
+        comps.day = 22
+        if let sunDate = cal.date(from: comps) {
+            let cycleStart = appState.currentCycleStartDate(from: sunDate)
+            #expect(cal.component(.weekday, from: cycleStart) == 2)
+            #expect(cal.component(.day, from: cycleStart) == 16)
+        }
+
+        // Nov 23, 2026 is next Monday -> cycle start should reset to Monday Nov 23
+        comps.day = 23
+        if let nextMonDate = cal.date(from: comps) {
+            let cycleStart = appState.currentCycleStartDate(from: nextMonDate)
+            #expect(cal.component(.weekday, from: cycleStart) == 2)
+            #expect(cal.component(.day, from: cycleStart) == 23)
+        }
+    }
+
+    @Test func testCurrentCycleStartDateSundayReset() {
+        let appState = AppState()
+        appState.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 1) // Sunday
+
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        comps.hour = 10
+        comps.minute = 0
+
+        // Nov 15, 2026 is Sunday (weekday 1)
+        comps.day = 15
+        if let sunDate = cal.date(from: comps) {
+            let cycleStart = appState.currentCycleStartDate(from: sunDate)
+            #expect(cal.component(.weekday, from: cycleStart) == 1)
+            #expect(cal.component(.day, from: cycleStart) == 15)
+        }
+
+        // Nov 20, 2026 is Friday (weekday 6) -> cycle start should still be Sunday Nov 15
+        comps.day = 20
+        if let friDate = cal.date(from: comps) {
+            let cycleStart = appState.currentCycleStartDate(from: friDate)
+            #expect(cal.component(.weekday, from: cycleStart) == 1)
+            #expect(cal.component(.day, from: cycleStart) == 15)
+        }
+    }
+
+    @Test func testPreviousCycleDateInterval() {
+        let appState = AppState()
+        appState.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 2)
+
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        comps.day = 18 // Wednesday Nov 18
+        guard let refDate = cal.date(from: comps) else { return }
+
+        let (prevStart, prevEnd) = appState.previousCycleDateInterval(from: refDate)
+        let diffDays = cal.dateComponents([.day], from: prevStart, to: prevEnd).day
+        #expect(diffDays == 7)
+        #expect(cal.component(.day, from: prevEnd) == 16) // Nov 16 (Monday)
+        #expect(cal.component(.day, from: prevStart) == 9) // Nov 9 (previous Monday)
+    }
+
+    @Test func testWeekCountFiltersByCycleReset() {
+        let appState = AppState()
+        appState.currentUser = UserProfile(id: "userA", name: "Alice")
+        appState.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 2) // Monday
+
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+
+        // Cycle start is Monday Nov 16 00:00:00
+        // Log 1: Sunday Nov 15 (previous cycle)
+        comps.day = 15
+        comps.hour = 22
+        let oldDate = cal.date(from: comps)!
+
+        // Log 2: Tuesday Nov 17 (current cycle)
+        comps.day = 17
+        comps.hour = 12
+        let currentDate1 = cal.date(from: comps)!
+
+        // Log 3: Thursday Nov 19 (current cycle)
+        comps.day = 19
+        comps.hour = 15
+        let currentDate2 = cal.date(from: comps)!
+
+        appState.logs = [
+            SmokeLog(id: "1", userId: "userA", timestamp: oldDate),
+            SmokeLog(id: "2", userId: "userA", timestamp: currentDate1),
+            SmokeLog(id: "3", userId: "userA", timestamp: currentDate2),
+            SmokeLog(id: "4", userId: "userB", timestamp: currentDate1) // other user
+        ]
+
+        // As of Friday Nov 20, userA should have exactly 2 logs in the current cycle
+        comps.day = 20
+        let refDate = cal.date(from: comps)!
+        #expect(appState.weekCount(for: "userA", on: refDate) == 2)
+    }
+
+    @Test func testSettlementBreakdownCodable() throws {
+        let breakdown = SettlementBreakdown(
+            id: "settlement-123",
+            scenario: .case1OneExceeded,
+            limit: 20,
+            costPerStick: 18.0,
+            currency: "₹",
+            userAName: "Alice",
+            userBName: "Bob",
+            userACount: 25,
+            userBCount: 15,
+            userAExcess: 5,
+            userBExcess: 0,
+            winnerName: "Bob",
+            loserName: "Alice",
+            penalizedSticks: 5,
+            amountOwed: 90.0,
+            summaryMessage: "Alice owes Bob ₹90.00",
+            isSettled: true
+        )
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(breakdown)
+
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(SettlementBreakdown.self, from: data)
+
+        #expect(decoded.id == breakdown.id)
+        #expect(decoded.scenario == breakdown.scenario)
+        #expect(decoded.amountOwed == breakdown.amountOwed)
+        #expect(decoded.winnerName == breakdown.winnerName)
+        #expect(decoded.loserName == breakdown.loserName)
+        #expect(decoded.isSettled == breakdown.isSettled)
+    }
+
+    // MARK: - Auto Settlement & Multi-Week Cycle Verification
+
+    @Test func testAutoSettlementTriggersEvenWithZeroLogs() {
+        let appState = AppState()
+        appState.activeGroupId = "testPact"
+        appState.currentUser = UserProfile(id: "userA", name: "Alice")
+        appState.friendUser = UserProfile(id: "userB", name: "Bob")
+        appState.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 2) // Monday
+
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        comps.day = 1 // 2 weeks before test
+        appState.pactCreatedAt = cal.date(from: comps)!
+
+        // Reference date: Wednesday Nov 18, 2026
+        comps.day = 18
+        comps.hour = 12
+        let testNow = cal.date(from: comps)!
+
+        // Zero smoke logs recorded for previous week (Nov 9 - Nov 16)
+        appState.logs = []
+        appState.settlements = []
+
+        appState.checkAndAutoTriggerSettlement(now: testNow)
+
+        #expect(appState.showingSettlementSheet == true)
+        #expect(appState.latestSettlement != nil)
+        #expect(appState.latestSettlement?.userACount == 0)
+        #expect(appState.latestSettlement?.userBCount == 0)
+        #expect(appState.latestSettlement?.amountOwed == 0.0)
+        #expect(appState.latestSettlement?.scenario == .case4Tie)
+    }
+
+    @Test func testAutoSettlementDoesNotTriggerForPactCreatedInCurrentCycle() {
+        let appState = AppState()
+        appState.activeGroupId = "testPact"
+        appState.currentUser = UserProfile(id: "userA", name: "Alice")
+        appState.friendUser = UserProfile(id: "userB", name: "Bob")
+        appState.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 2) // Monday
+
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        // Pact created on Tuesday Nov 17 (after current cycle start Nov 16)
+        comps.day = 17
+        appState.pactCreatedAt = cal.date(from: comps)!
+
+        // Reference date: Wednesday Nov 18
+        comps.day = 18
+        let testNow = cal.date(from: comps)!
+
+        appState.logs = []
+        appState.settlements = []
+
+        appState.checkAndAutoTriggerSettlement(now: testNow)
+
+        #expect(appState.showingSettlementSheet == false)
+        #expect(appState.latestSettlement == nil)
+    }
+
+    @Test func testAutoSettlementMultiWeekProgression() {
+        let appState = AppState()
+        appState.activeGroupId = "testPact"
+        appState.currentUser = UserProfile(id: "userA", name: "Alice")
+        appState.friendUser = UserProfile(id: "userB", name: "Bob")
+        appState.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 2) // Monday
+
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        comps.day = 1
+        appState.pactCreatedAt = cal.date(from: comps)!
+
+        // --- WEEK 1: Nov 16 ---
+        comps.day = 16
+        comps.hour = 10
+        let monNov16 = cal.date(from: comps)!
+
+        // Log 25 sticks for Alice in Week 1 (Nov 11)
+        comps.day = 11
+        let logDateWeek1 = cal.date(from: comps)!
+        for i in 1...25 {
+            appState.logs.append(SmokeLog(id: "log1_\(i)", userId: "userA", timestamp: logDateWeek1))
+        }
+
+        // Trigger on Nov 16 (settling Nov 9 - Nov 16)
+        appState.checkAndAutoTriggerSettlement(now: monNov16)
+        #expect(appState.showingSettlementSheet == true)
+        #expect(appState.latestSettlement?.userACount == 25)
+        #expect(appState.latestSettlement?.scenario == .case1OneExceeded)
+
+        // Archive Week 1 settlement
+        let week1Settlement = appState.latestSettlement!
+        appState.settlements.append(week1Settlement)
+        appState.showingSettlementSheet = false
+
+        // Mid-week Nov 18: should not re-trigger
+        comps.day = 18
+        let wedNov18 = cal.date(from: comps)!
+        appState.checkAndAutoTriggerSettlement(now: wedNov18)
+        #expect(appState.showingSettlementSheet == false)
+
+        // --- WEEK 2: Nov 23 ---
+        // Log 22 sticks for Bob in Week 2 (Nov 19)
+        comps.day = 19
+        let logDateWeek2 = cal.date(from: comps)!
+        for i in 1...22 {
+            appState.logs.append(SmokeLog(id: "log2_\(i)", userId: "userB", timestamp: logDateWeek2))
+        }
+
+        comps.day = 23
+        comps.hour = 9
+        let monNov23 = cal.date(from: comps)!
+
+        // Trigger on Nov 23: MUST trigger settlement for Week 2 (Nov 16 - Nov 23)
+        // (This verifies the bug where prior week settlement in [prevStart, now] blocked auto-trigger is resolved)
+        appState.checkAndAutoTriggerSettlement(now: monNov23)
+        #expect(appState.showingSettlementSheet == true)
+        #expect(appState.latestSettlement?.userBCount == 22)
+        #expect(appState.latestSettlement?.winnerName == "Alice")
+        #expect(appState.latestSettlement?.loserName == "Bob")
+    }
+
+    @Test func testHistoricalWeekCountDoesNotLeakFutureLogs() {
+        let appState = AppState()
+        appState.pactConfig = PactConfig(individualWeeklyLimit: 20, costPerStick: 18.0, currencySymbol: "₹", resetDayOfWeek: 2) // Monday
+
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+
+        // Week 1: Mon Nov 9 - Mon Nov 16
+        comps.day = 11
+        let logW1 = cal.date(from: comps)!
+
+        // Week 2: Mon Nov 16 - Mon Nov 23
+        comps.day = 18
+        let logW2 = cal.date(from: comps)!
+
+        // Week 3: Mon Nov 23 - Mon Nov 30
+        comps.day = 25
+        let logW3 = cal.date(from: comps)!
+
+        appState.logs = [
+            SmokeLog(id: "1", userId: "userA", timestamp: logW1),
+            SmokeLog(id: "2", userId: "userA", timestamp: logW2),
+            SmokeLog(id: "3", userId: "userA", timestamp: logW3)
+        ]
+
+        // Querying weekCount for a date in Week 1 should count ONLY Week 1 log
+        comps.day = 12
+        let dateInW1 = cal.date(from: comps)!
+        #expect(appState.weekCount(for: "userA", on: dateInW1) == 1)
+
+        // Querying weekCount for a date in Week 2 should count ONLY Week 2 log
+        comps.day = 20
+        let dateInW2 = cal.date(from: comps)!
+        #expect(appState.weekCount(for: "userA", on: dateInW2) == 1)
+    }
+
+    @Test func testSettlementBreakdownCodableWithCycleDates() throws {
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        comps.day = 9
+        let start = cal.date(from: comps)!
+        comps.day = 16
+        let end = cal.date(from: comps)!
+
+        let breakdown = SettlementBreakdown(
+            id: "s-cycle-1",
+            scenario: .case2BothExceeded,
+            limit: 20,
+            costPerStick: 18.0,
+            currency: "₹",
+            userAName: "Alice",
+            userBName: "Bob",
+            userACount: 26,
+            userBCount: 22,
+            userAExcess: 6,
+            userBExcess: 2,
+            winnerName: "Bob",
+            loserName: "Alice",
+            penalizedSticks: 4,
+            amountOwed: 72.0,
+            summaryMessage: "Alice owes Bob ₹72.00",
+            isSettled: true,
+            cycleStartDate: start,
+            cycleEndDate: end
+        )
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(breakdown)
+
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(SettlementBreakdown.self, from: data)
+
+        #expect(decoded.id == breakdown.id)
+        #expect(decoded.cycleStartDate == breakdown.cycleStartDate)
+        #expect(decoded.cycleEndDate == breakdown.cycleEndDate)
+        #expect(decoded.amountOwed == 72.0)
+    }
 }

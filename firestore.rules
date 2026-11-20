@@ -10,20 +10,81 @@ service cloud.firestore {
       allow create, update: if request.auth != null && request.auth.uid == userId;
     }
     
+    // Helper function to check if authenticated user is a member of the pact
+    function isPactMember(pactId) {
+      return request.auth != null && 
+        pactId != null &&
+        'memberIds' in get(/databases/$(database)/documents/pacts/$(pactId)).data &&
+        request.auth.uid in get(/databases/$(database)/documents/pacts/$(pactId)).data.memberIds;
+    }
+
     // Pacts and their subcollections
     match /pacts/{pactId} {
-      // Allow authenticated users to view, create, or update pacts
-      allow read, write: if request.auth != null;
+      // Allow single doc read if user is authenticated and either:
+      // 1. Pact has no memberIds field yet (legacy pact backward compatibility)
+      // 2. User is already a member of this pact
+      // 3. Pact has open slots to join (< 2 members)
+      allow get: if request.auth != null && (
+        !('memberIds' in resource.data) ||
+        request.auth.uid in resource.data.memberIds ||
+        resource.data.memberIds.size() < 2
+      );
       
+      // Allow collection list queries only if user is a member
+      allow list: if request.auth != null && 
+        'memberIds' in resource.data &&
+        resource.data.memberIds != null && 
+        request.auth.uid in resource.data.memberIds;
+
+      // Allow creating a pact: creator must be in memberIds and max 2 members
+      allow create: if request.auth != null &&
+        request.resource.data.memberIds is list &&
+        request.resource.data.memberIds.size() >= 1 &&
+        request.resource.data.memberIds.size() <= 2 &&
+        request.auth.uid in request.resource.data.memberIds;
+      
+      // Allow updating a pact:
+      // 1. Existing member updating config/members
+      // 2. Legacy pact without memberIds being initialized by a member (max 2)
+      // 3. A new user joining an open pact (< 2 members) preserving existing members
+      allow update: if request.auth != null && (
+        ('memberIds' in resource.data && request.auth.uid in resource.data.memberIds) ||
+        (!('memberIds' in resource.data) &&
+         request.resource.data.memberIds is list &&
+         request.resource.data.memberIds.size() <= 2 &&
+         request.auth.uid in request.resource.data.memberIds) ||
+        ('memberIds' in resource.data &&
+         resource.data.memberIds.size() < 2 &&
+         request.resource.data.memberIds is list &&
+         request.resource.data.memberIds.size() <= 2 &&
+         request.resource.data.memberIds.hasAll(resource.data.memberIds) &&
+         request.auth.uid in request.resource.data.memberIds)
+      );
+
       // Subcollection for smoke logs
       match /logs/{logId} {
-        allow read, write: if request.auth != null;
+        allow read: if isPactMember(pactId);
+        allow create: if isPactMember(pactId) && 
+          request.resource.data.userId == request.auth.uid;
+        allow update, delete: if isPactMember(pactId) && 
+          resource.data.userId == request.auth.uid;
       }
       
       // Subcollection for journal entries
       match /journal/{entryId} {
-        allow read, write: if request.auth != null;
+        allow read: if isPactMember(pactId);
+        allow create: if isPactMember(pactId) && 
+          request.resource.data.userId == request.auth.uid;
+        allow update, delete: if isPactMember(pactId) && 
+          resource.data.userId == request.auth.uid;
+      }
+
+      // Subcollection for persistent settlement archival (Bug 3)
+      match /settlements/{settlementId} {
+        allow read: if isPactMember(pactId);
+        allow create, update: if isPactMember(pactId);
       }
     }
   }
 }
+

@@ -236,8 +236,8 @@ public enum SettlementScenario: String, Codable {
     case case4Tie = "Perfect Tie"
 }
 
-public struct SettlementBreakdown: Identifiable, Codable {
-    public var id: String = UUID().uuidString
+public struct SettlementBreakdown: Identifiable, Codable, Equatable {
+    public var id: String
     public var scenario: SettlementScenario
     public var limit: Int
     public var costPerStick: Double
@@ -253,7 +253,54 @@ public struct SettlementBreakdown: Identifiable, Codable {
     public var penalizedSticks: Int
     public var amountOwed: Double
     public var summaryMessage: String
-    public var isSettled: Bool = false
+    public var isSettled: Bool
+    public var timestamp: Date
+    public var cycleStartDate: Date?
+    public var cycleEndDate: Date?
+
+    public init(
+        id: String = UUID().uuidString,
+        scenario: SettlementScenario,
+        limit: Int,
+        costPerStick: Double,
+        currency: String = "₹",
+        userAName: String,
+        userBName: String,
+        userACount: Int,
+        userBCount: Int,
+        userAExcess: Int,
+        userBExcess: Int,
+        winnerName: String? = nil,
+        loserName: String? = nil,
+        penalizedSticks: Int,
+        amountOwed: Double,
+        summaryMessage: String,
+        isSettled: Bool = false,
+        timestamp: Date = Date(),
+        cycleStartDate: Date? = nil,
+        cycleEndDate: Date? = nil
+    ) {
+        self.id = id
+        self.scenario = scenario
+        self.limit = limit
+        self.costPerStick = costPerStick
+        self.currency = currency
+        self.userAName = userAName
+        self.userBName = userBName
+        self.userACount = userACount
+        self.userBCount = userBCount
+        self.userAExcess = userAExcess
+        self.userBExcess = userBExcess
+        self.winnerName = winnerName
+        self.loserName = loserName
+        self.penalizedSticks = penalizedSticks
+        self.amountOwed = amountOwed
+        self.summaryMessage = summaryMessage
+        self.isSettled = isSettled
+        self.timestamp = timestamp
+        self.cycleStartDate = cycleStartDate
+        self.cycleEndDate = cycleEndDate
+    }
 }
 
 public struct JournalEntry: Identifiable, Codable, Equatable {
